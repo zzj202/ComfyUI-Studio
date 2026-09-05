@@ -85,14 +85,14 @@ export function disposeBatch(id: string) {
 /** 预生成 items 顺序 = images × batch（每张图跑 batch 单，每单一个独立 seed） */
 /** 预生成 items 顺序：
  *  单图槽位工作流 = images × batch（每张图跑 batch 单，每单一个独立 seed）
- *  多图槽位工作流 = 每 slots 张图为一组，每组跑 batch 单（如视频工作流 Picture1/2/3 一组） */
+ *  多图槽位工作流 = 每 slots 张图为一组（末组允许不满额），每组跑 batch 单 */
 function planItems(job: BatchJob) {
   const slots = Math.max(1, job.imageNodeIds?.length || 1)
   const groups: string[][] = []
   if (slots === 1) {
     for (const img of job.images) groups.push([img])
   } else {
-    for (let i = 0; i + slots <= job.images.length; i += slots) {
+    for (let i = 0; i < job.images.length; i += slots) {
       groups.push(job.images.slice(i, i + slots))
     }
   }
@@ -157,11 +157,29 @@ function buildGraph(job: BatchJob, item: BatchItem): { ok: true; graph: any } | 
     if (!graph[nid]) continue
     graph[nid].inputs = { ...graph[nid].inputs, ...fields }
   }
-  // 覆盖 image（多槽位按组填充：Picture 1/2/3 依次对应一组参考图，缺位槽保持原样）
+  // 覆盖 image（多槽位按组填充：Picture 1/2/3 依次对应一组参考图）
   const imgs = item.images || [item.image]
+  const used = new Set<string>()
   job.imageNodeIds.forEach((nid, i) => {
-    if (imgs[i] && graph[nid]) graph[nid].inputs.image = imgs[i]
+    if (imgs[i] && graph[nid]) {
+      graph[nid].inputs.image = imgs[i]
+      used.add(nid)
+    }
   })
+  // 未启用的槽位：删除图中对该 LoadImage 的引用输入（如 ref_images.ref_image_N），并删除节点本身
+  // —— 这样新增几张参考图就只启用几个 Picture 槽位，其余槽位完全不参与执行
+  const unusedSlots = job.imageNodeIds.filter((nid) => !used.has(nid))
+  if (unusedSlots.length) {
+    const unusedSet = new Set(unusedSlots)
+    for (const node of Object.values<any>(graph)) {
+      const inputs = node?.inputs
+      if (!inputs || typeof inputs !== 'object') continue
+      for (const [k, v] of Object.entries<any>(inputs)) {
+        if (Array.isArray(v) && unusedSet.has(String(v[0]))) delete inputs[k]
+      }
+    }
+    for (const nid of unusedSlots) delete graph[nid]
+  }
   // 覆盖 seed
   if (item.seed !== null && job.seedNodeId && job.seedKey && graph[job.seedNodeId]) {
     graph[job.seedNodeId].inputs[job.seedKey] = item.seed

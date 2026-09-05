@@ -46,13 +46,7 @@ export default defineEventHandler(async (event) => {
   imageNodes.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN', { numeric: true }))
   const imageNodeIds = imageNodes.map((n) => n.id)
 
-  // 多槽位：图片按槽位数分组，凑不满一组的尾巴不参与
-  if (imageNodeIds.length > 1 && images.length < imageNodeIds.length) {
-    throw createError({
-      statusCode: 400,
-      message: `该工作流每单需要 ${imageNodeIds.length} 张参考图（${imageNodes.map((n) => n.title).join(' / ')}），当前只有 ${images.length} 张`
-    })
-  }
+  // 多槽位：允许不满一组——上传几张就启用几个槽位（buildGraph 会动态移除未启用槽位的连线与节点）
 
   const job = createBatch({
     workflow,

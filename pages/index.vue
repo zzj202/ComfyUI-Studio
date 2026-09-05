@@ -43,7 +43,7 @@
           >
             <div class="dz-hint">
               📤 点击 或 拖拽图片到此处（可多选）
-              <template v-if="isVideoWf"> · 本工作流每单按 {{ imageSlots }} 张一组使用（Picture 1 → 2 → 3 顺序）</template>
+              <template v-if="isVideoWf"> · 本工作流每单最多 {{ imageSlots }} 张一组（Picture 1 → 2 → 3 顺序），上传几张就启用几张</template>
               <template v-else> · 多张图将<b>轮流</b>与当前提示词组合，逐张 × 批次连发</template>
             </div>
             <input
@@ -693,8 +693,7 @@ const imageSlots = computed(() => Object.values<any>(graph.value || {}).filter(n
 const validImageCount = computed(() => images.value.filter(i => i.serverName).length)
 const canSubmit = computed(() => {
   if (!graph.value) return false
-  const n = validImageCount.value
-  return imageSlots.value > 1 ? n >= imageSlots.value : n > 0
+  return validImageCount.value > 0
 })
 const planText = computed(() => {
   if (!graph.value) return '请先在左侧选择工作流'
@@ -703,10 +702,12 @@ const planText = computed(() => {
   if (!n) return '请先上传参考图'
   const batch = batchCount.value || 1
   if (slots > 1) {
-    if (n < slots) return `该工作流每单需要 ${slots} 张参考图（一组），还差 ${slots - n} 张`
-    const groups = Math.floor(n / slots)
-    const leftover = n % slots
-    return `将生成 ${groups * batch} 个（${groups} 组 × ${batch} 批，每组 ${slots} 张图）${leftover ? `，多出的 ${leftover} 张不参与` : ''}`
+    const groups = Math.ceil(n / slots)
+    const last = n - (groups - 1) * slots
+    const per = groups === 1
+      ? `启用 Picture 1→${last}，共 ${last} 张`
+      : `每组最多 ${slots} 张（末组 ${last} 张）`
+    return `将生成 ${groups * batch} 个（${groups} 组 × ${batch} 批）· ${per}`
   }
   return `将生成 ${n * batch} 个（${n} 张参考图 × ${batch} 批）`
 })
