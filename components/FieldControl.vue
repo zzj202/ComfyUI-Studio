@@ -8,7 +8,7 @@
     <textarea
       v-if="field.kind === 'textarea'"
       :value="modelValue"
-      rows="3"
+      rows="5"
       @input="$emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
     ></textarea>
 
