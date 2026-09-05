@@ -29,7 +29,9 @@
       <div class="card">
         <h2>
           🖼 参考图（{{ images.length }}）
-          <button v-if="images.length" class="btn mini danger" @click="clearImages" style="margin-left:auto">清空</button>
+          <button class="btn mini" style="margin-left:auto" title="上传一个生成产物（图片/视频），按文件名反查其提交参数并一键复用全部参数" @click="($refs.assetFileInput as any)?.click()">♻️ 从资产复用</button>
+          <input ref="assetFileInput" type="file" accept="image/*,video/mp4,video/webm" hidden @change="onAssetFile" />
+          <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
         </h2>
         <div v-if="!selectedFile" class="empty">↑ 先在上方选择一个工作流</div>
         <template v-else>
@@ -689,64 +691,84 @@ async function applyAssetParams(item: any) {
   applyingParams.value = true
   try {
     const res: any = await $fetch('/api/asset-params', { params: { promptId: item.promptId } })
-    const g = res?.graph
-    if (!g || !Object.keys(g).length) { showToast('该资产没有可读取的提交参数'); return }
-
-    // ① 自动匹配最相似的本地工作流（按 节点ID+class_type 重合度打分），必要时自动切换
-    let best: { file: string; score: number } | null = null
-    for (const w of workflows.value.filter(x => !x.broken)) {
-      let wg: any = wfGraphCache.get(w.file)
-      if (!wg) {
-        try { wg = await $fetch(`/api/workflows/${encodeURIComponent(w.file)}`); wfGraphCache.set(w.file, wg) }
-        catch { continue }
-      }
-      let score = 0
-      for (const [nid, node] of Object.entries<any>(g)) {
-        if (wg?.[nid]?.class_type === node?.class_type) score++
-      }
-      if (!best || score > best.score) best = { file: w.file, score }
-    }
-    const total = Object.keys(g).length
-    if (best && best.file !== selectedFile.value && best.score >= total * 0.5) {
-      const wf = workflows.value.find(w => w.file === best!.file)
-      if (wf) { await selectWorkflow(wf); showToast(`已切换到该资产的工作流：${wf.name}`) }
-    }
-
-    // ② 按「节点ID.字段名」精确还原所有参数（提示词/分辨率/时长/LoRA/强度等一切输入）
-    let n = 0
-    for (const f of fields.value) {
-      const v = g?.[f.nodeId]?.inputs?.[f.name]
-      if (v === undefined || v === null || Array.isArray(v)) continue
-      form[f.uid] = v
-      n++
-    }
-    // ③ seed 进入「复用中」：本批固定该 seed，本会话批次全部结束后自动恢复随机
-    const sf = seedField.value
-    if (sf) {
-      const sv = g?.[sf.nodeId]?.inputs?.[sf.name]
-      if (typeof sv === 'number') { fixedSeedVal.value = sv; seedReuseActive.value = true; n++ }
-    }
-    // ④ 还原参考图：LoadImage 按标题自然排序（与后端槽位顺序一致），src 走 /api/view 代理
-    const loadNodes = Object.entries<any>(g)
-      .filter(([, node]) => node?.class_type === 'LoadImage' && typeof node?.inputs?.image === 'string')
-      .sort((a, b) => String(a[1]?._meta?.title || '').localeCompare(String(b[1]?._meta?.title || ''), 'zh-Hans-CN', { numeric: true }))
-    const restored: QueuedImg[] = loadNodes.map(([nid, node]) => {
-      const raw = String(node.inputs.image)
-      const idx = raw.lastIndexOf('/')
-      const filename = idx >= 0 ? raw.slice(idx + 1) : raw
-      const subfolder = idx >= 0 ? raw.slice(0, idx) : ''
-      const q = new URLSearchParams({ filename, type: 'input' })
-      if (subfolder) q.set('subfolder', subfolder)
-      return { id: `${nid}-${Date.now().toString(36)}`, name: filename, src: `/api/view?${q}`, serverName: raw }
-    })
-    if (restored.length) images.value = restored
-    saveSession()
-    showToast(`✅ 已复用该资产全部参数：${n} 项参数${restored.length ? ` + ${restored.length} 张参考图` : ''}`)
+    await applyGraph(res?.graph)
   } catch (e: any) {
     showToast(e?.data?.message || e?.message || '读取资产参数失败')
   } finally {
     applyingParams.value = false
   }
+}
+
+// 上传一个生成产物（图片/视频），按文件名在最近产出里反查对应资产并复用其全部参数
+async function onAssetFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  input.value = ''
+  if (!f || applyingParams.value) return
+  applyingParams.value = true
+  try {
+    const res: any = await $fetch('/api/asset-params', { params: { filename: f.name } })
+    await applyGraph(res?.graph)
+  } catch (e: any) {
+    showToast(e?.data?.message || e?.message || '读取资产参数失败')
+  } finally {
+    applyingParams.value = false
+  }
+}
+
+// 核心：应用一份提交时的工作流图
+async function applyGraph(g: any) {
+  if (!g || !Object.keys(g).length) { showToast('该资产没有可读取的提交参数'); return }
+  // ① 自动匹配最相似的本地工作流（按 节点ID+class_type 重合度打分），必要时自动切换
+  let best: { file: string; score: number } | null = null
+  for (const w of workflows.value.filter(x => !x.broken)) {
+    let wg: any = wfGraphCache.get(w.file)
+    if (!wg) {
+      try { wg = await $fetch(`/api/workflows/${encodeURIComponent(w.file)}`); wfGraphCache.set(w.file, wg) }
+      catch { continue }
+    }
+    let score = 0
+    for (const [nid, node] of Object.entries<any>(g)) {
+      if (wg?.[nid]?.class_type === node?.class_type) score++
+    }
+    if (!best || score > best.score) best = { file: w.file, score }
+  }
+  const total = Object.keys(g).length
+  if (best && best.file !== selectedFile.value && best.score >= total * 0.5) {
+    const wf = workflows.value.find(w => w.file === best!.file)
+    if (wf) { await selectWorkflow(wf); showToast(`已切换到该资产的工作流：${wf.name}`) }
+  }
+
+  // ② 按「节点ID.字段名」精确还原所有参数（提示词/分辨率/时长/LoRA/强度等一切输入）
+  let n = 0
+  for (const f of fields.value) {
+    const v = g?.[f.nodeId]?.inputs?.[f.name]
+    if (v === undefined || v === null || Array.isArray(v)) continue
+    form[f.uid] = v
+    n++
+  }
+  // ③ seed 进入「复用中」：本批固定该 seed，本会话批次全部结束后自动恢复随机
+  const sf = seedField.value
+  if (sf) {
+    const sv = g?.[sf.nodeId]?.inputs?.[sf.name]
+    if (typeof sv === 'number') { fixedSeedVal.value = sv; seedReuseActive.value = true; n++ }
+  }
+  // ④ 还原参考图：LoadImage 按标题自然排序（与后端槽位顺序一致），src 走 /api/view 代理
+  const loadNodes = Object.entries<any>(g)
+    .filter(([, node]) => node?.class_type === 'LoadImage' && typeof node?.inputs?.image === 'string')
+    .sort((a, b) => String(a[1]?._meta?.title || '').localeCompare(String(b[1]?._meta?.title || ''), 'zh-Hans-CN', { numeric: true }))
+  const restored: QueuedImg[] = loadNodes.map(([nid, node]) => {
+    const raw = String(node.inputs.image)
+    const idx = raw.lastIndexOf('/')
+    const filename = idx >= 0 ? raw.slice(idx + 1) : raw
+    const subfolder = idx >= 0 ? raw.slice(0, idx) : ''
+    const q = new URLSearchParams({ filename, type: 'input' })
+    if (subfolder) q.set('subfolder', subfolder)
+    return { id: `${nid}-${Date.now().toString(36)}`, name: filename, src: `/api/view?${q}`, serverName: raw }
+  })
+  if (restored.length) images.value = restored
+  saveSession()
+  showToast(`✅ 已复用该资产全部参数：${n} 项参数${restored.length ? ` + ${restored.length} 张参考图` : ''}`)
 }
 // 复用中状态：批次全部结束后恢复随机
 const seedReuseActive = ref(false)
