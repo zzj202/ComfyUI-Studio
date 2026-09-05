@@ -14,6 +14,7 @@ export interface BatchItem {
   promptId?: string
   outputs: { filename: string; subfolder: string; type: string; kind: string }[]
   error?: string
+  durationMs?: number  // 该单生成耗时（提交成功 → 完成/失败）
 }
 
 export interface BatchJob {
@@ -61,6 +62,7 @@ export function getBatchInfo(id: string) {
       status: it.status,
       promptId: it.promptId,
       error: it.error,
+      durationMs: it.durationMs,
       outputCount: it.outputs.length
     })),
     slotCount: j.imageNodeIds.length
@@ -210,6 +212,7 @@ export async function runItem(job: BatchJob, item: BatchItem) {
   item.promptId = promptRes.prompt_id
   const pid = item.promptId
   const start = Date.now()
+  item.durationMs = undefined
   // 轮询完成（阻塞该 item，直到成功/失败/取消）
   for (;;) {
       if (job.cancelled) {
@@ -219,6 +222,7 @@ export async function runItem(job: BatchJob, item: BatchItem) {
       if (Date.now() - start > MAX_ITEM_MS) {
         item.status = 'error'
         item.error = '执行超时'
+        item.durationMs = Date.now() - start
         return
       }
       try {
@@ -227,10 +231,12 @@ export async function runItem(job: BatchJob, item: BatchItem) {
         if (entry?.status?.status_str === 'success' || entry?.status?.completed) {
           item.status = 'done'
           item.outputs = normalizeOutputs(entry)
+          item.durationMs = Date.now() - start
           return
         }
         if (entry?.status?.status_str === 'error') {
           item.status = 'error'
+          item.durationMs = Date.now() - start
           item.error =
             entry?.status?.messages?.map((m: any) => (Array.isArray(m) ? m[1] : m)).join('; ') || '执行失败'
           return

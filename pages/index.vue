@@ -189,6 +189,7 @@
             </div>
             <div class="result-foot">
               <span class="fn" :title="r.filename">{{ r.filename }}</span>
+              <span v-if="fmtDur(r.durationMs)" class="time-chip" title="该单生成耗时">⏱ {{ fmtDur(r.durationMs) }}</span>
               <a class="btn mini" :href="r.src" :download="r.filename">下载</a>
             </div>
           </div>
@@ -214,6 +215,7 @@
             <div v-if="promptText(item)" class="result-prompt" :title="promptText(item)">{{ promptText(item) }}</div>
             <div class="result-foot">
               <button v-if="hasPrompts(item)" class="btn mini" title="将这条记录的提示词与 seed 一键填回上方输入框" @click="applyPrompt(item)">🔁 复用提示词+Seed</button>
+              <span v-if="fmtDur(item.durationMs)" class="time-chip" title="生成耗时">⏱ {{ fmtDur(item.durationMs) }}</span>
               <span class="fn" :title="item.promptId">{{ item.outputs.length }} 个 · {{ item.promptId.slice(0, 8) }}…</span>
               <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0], true)" :download="item.outputs[0].filename">下载</a>
             </div>
@@ -244,7 +246,16 @@ interface FieldDef {
   kind: 'textarea' | 'number' | 'select' | 'bool' | 'text'
   options?: string[]; step?: number; isSeed?: boolean; original: any
 }
-interface Out { kind: string; filename: string; subfolder: string; type: string; src: string }
+interface Out { kind: string; filename: string; subfolder: string; type: string; src: string; durationMs?: number }
+
+/** 生成耗时格式化：<1s 显示毫秒，其余秒（1 位小数）；超过 60s 显示分秒 */
+function fmtDur(ms?: number | null): string {
+  if (ms == null || ms < 0) return ''
+  if (ms < 1000) return `${ms}ms`
+  const s = ms / 1000
+  if (s < 60) return `${s.toFixed(1)}s`
+  return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`
+}
 
 // ===== 状态 =====
 const workflows = ref<any[]>([])
@@ -591,7 +602,7 @@ const batchDoneOutputs = computed<Out[]>(()=>{
   const list:Out[]=[]
   for (const item of (activeBatch.value?.items||[])) {
     if (item.status==='done') for (const o of item.outputs||[]) {
-      list.push({ ...o, src: mediaUrl(o, true) })
+      list.push({ ...o, src: mediaUrl(o, true), durationMs: item.durationMs })
     }
   }
   return list
