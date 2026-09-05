@@ -16,13 +16,20 @@
 
 body {
   margin: 0;
+  height: 100vh;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
 }
 
-.app { min-height: 100vh; }
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 .topbar {
   display: flex;
@@ -53,15 +60,21 @@ body {
 .health.bad .dot { background: var(--red); }
 
 .layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   max-width: 1480px;
+  width: 100%;
   margin: 0 auto;
-  padding: 20px 24px 60px;
+  padding: 14px 24px 16px;
+  box-sizing: border-box;
 }
 
-/* 顶栏：工作流选择 */
-.wf-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.wf-bar-title { font-weight: 700; font-size: 15px; flex-shrink: 0; }
-.wf-chips { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; }
+/* 顶栏：工作流选择（在左栏内） */
+.wf-bar { padding: 12px 14px; }
+.wf-bar-title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+.wf-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .wf-chip {
   padding: 8px 14px;
   border: 1px solid var(--border);
@@ -76,18 +89,50 @@ body {
 .wf-chip.broken { border-color: var(--red); color: var(--red); }
 .wf-chip .wf-name { font-weight: 600; font-size: 13px; }
 .wf-chip .wf-meta { color: var(--muted); font-size: 11.5px; }
-.wf-bar-hint { flex-shrink: 0; padding: 6px 10px; max-width: 300px; }
 
-/* 左右双栏 */
+/* 左右双栏（锁定视口高度，各自内部滚动） */
 .cols {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-  margin-top: 20px;
+  gap: 18px;
+  align-items: stretch;
+  margin-top: 0;
 }
-.col { min-width: 0; }
-@media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
+.col { min-width: 0; min-height: 0; }
+.col-input { overflow-y: auto; padding-right: 4px; }
+.col-output {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.col-output .card { flex-shrink: 0; margin-bottom: 14px; }
+/* 本批结果：最多占右栏 45%，内部滚动 */
+.col-output .card.batch-result-card {
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.batch-result-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+/* 最近产出：填满剩余高度，内部滚动 */
+.col-output .card.history-card {
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.history-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.history-card .empty { flex-shrink: 0; }
+@media (max-width: 1000px) {
+  .cols { grid-template-columns: 1fr; }
+  .col-input, .history-card .grid, .batch-result-card .grid { overflow-y: visible; }
+  body { overflow: auto; }
+  .app { height: auto; overflow: visible; }
+}
 
 .card {
   background: var(--card);

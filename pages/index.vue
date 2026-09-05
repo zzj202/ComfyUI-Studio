@@ -1,38 +1,37 @@
 <template>
   <div class="layout">
-    <!-- 顶栏：工作流选择（横向） -->
-    <div class="wf-bar card">
-      <div class="wf-bar-title">📂 工作流</div>
-      <div class="wf-chips">
-        <div
-          v-for="wf in workflows"
-          :key="wf.file"
-          class="wf-chip"
-          :class="{ active: wf.file === selectedFile, broken: wf.broken }"
-          @click="selectWorkflow(wf)"
-        >
-          <span class="wf-name">{{ wf.name }}</span>
-          <span class="wf-meta">
-            <template v-if="runningOnWorkflow(wf.file)">● 批量进行中</template>
-            <template v-else-if="wf.broken">JSON 解析失败</template>
-            <template v-else>{{ wf.nodeCount }} 节点</template>
-          </span>
-        </div>
-        <span v-if="workflows.length === 0" class="empty" style="padding:0">暂无工作流</span>
-      </div>
-      <div class="hint wf-bar-hint">把 ComfyUI 导出(API) 的 json 放进 <code>server/workflows/</code> 即出现在顶部。多张参考图可拖拽排序。</div>
-    </div>
-
     <main class="cols">
       <!-- 左栏：参数输入 -->
-      <div class="col">
+      <div class="col col-input">
+      <!-- ⓪ 工作流选择 -->
+      <div class="wf-bar card">
+        <div class="wf-bar-title">📂 工作流</div>
+        <div class="wf-chips">
+          <div
+            v-for="wf in workflows"
+            :key="wf.file"
+            class="wf-chip"
+            :class="{ active: wf.file === selectedFile, broken: wf.broken }"
+            @click="selectWorkflow(wf)"
+          >
+            <span class="wf-name">{{ wf.name }}</span>
+            <span class="wf-meta">
+              <template v-if="runningOnWorkflow(wf.file)">● 批量进行中</template>
+              <template v-else-if="wf.broken">JSON 解析失败</template>
+              <template v-else>{{ wf.nodeCount }} 节点</template>
+            </span>
+          </div>
+          <span v-if="workflows.length === 0" class="empty" style="padding:0">暂无工作流</span>
+        </div>
+      </div>
+
       <!-- ① 参考图队列 -->
       <div class="card">
         <h2>
           🖼 参考图（{{ images.length }}）
           <button v-if="images.length" class="btn mini danger" @click="clearImages" style="margin-left:auto">清空</button>
         </h2>
-        <div v-if="!selectedFile" class="empty">↑ 先在顶部选择一个工作流</div>
+        <div v-if="!selectedFile" class="empty">↑ 先在上方选择一个工作流</div>
         <template v-else>
           <div
             class="dropzone"
@@ -177,9 +176,9 @@
       </div>
 
       <!-- 右栏：产出 -->
-      <div class="col">
+      <div class="col col-output">
       <!-- ③ 本批结果 -->
-      <div class="card" v-if="batchDoneOutputs.length">
+      <div class="card batch-result-card" v-if="batchDoneOutputs.length">
         <h2>✨ 本次批量结果（{{ batchDoneOutputs.length }}）</h2>
         <div class="grid">
           <div v-for="(r, i) in batchDoneOutputs" :key="i" class="result-item">
@@ -197,7 +196,7 @@
       </div>
 
       <!-- ④ 最近产出 -->
-      <div class="card">
+      <div class="card history-card">
         <h2>
           🗂 最近产出（{{ history.length }}）
           <button class="btn mini" @click="refreshHistory" style="margin-left:auto">刷新</button>
