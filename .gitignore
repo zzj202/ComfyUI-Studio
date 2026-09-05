@@ -20,3 +20,10 @@ Thumbs.db
 final1.txt
 r1.txt
 v1.yaml
+
+.playwright-cli/
+*.png
+!docs/*.png
+final1.txt
+r1.txt
+v1.yaml
