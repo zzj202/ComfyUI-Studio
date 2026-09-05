@@ -393,10 +393,7 @@
   },
   "155": {
     "inputs": {
-      "lora_name": [
-        "156",
-        0
-      ],
+      "lora_name": "h3_000004500.safetensors",
       "strength_model": 1,
       "model": [
         "127",
@@ -406,15 +403,6 @@
     "class_type": "LoraLoaderModelOnly",
     "_meta": {
       "title": "LoRA加载器（仅模型）"
-    }
-  },
-  "156": {
-    "inputs": {
-      "text": "h3_000004500.safetensors"
-    },
-    "class_type": "CR Text",
-    "_meta": {
-      "title": "文本"
     }
   }
 }

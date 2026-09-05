@@ -344,6 +344,9 @@ function restoreImages() {
   }
 }
 
+// LoRA 文件列表（来自 ComfyUI 服务器），用于 lora_name 字段下拉选择，杜绝手输错文件名
+const loraOptions = ref<string[]>([])
+
 function extractFields(g: any): FieldDef[] {
   const out: FieldDef[] = []
   for (const [nodeId, node] of Object.entries<any>(g || {})) {
@@ -365,7 +368,8 @@ function extractFields(g: any): FieldDef[] {
       if (typeof value === 'number') { kind = 'number'; isSeed = /seed/i.test(name); if (!isSeed) step = Number.isInteger(value) ? 1 : 0.01 }
       else if (typeof value === 'boolean') kind = 'bool'
       else if (typeof value === 'string') {
-        if (name === 'sampler_name') { kind='select'; options=SAMPLERS }
+        if (name === 'lora_name') { kind='select'; options=loraOptions.value.length?loraOptions.value:[String(value)] }
+        else if (name === 'sampler_name') { kind='select'; options=SAMPLERS }
         else if (name === 'scheduler') { kind='select'; options=SCHEDULERS }
         else if (forceText || value.includes('\n') || (value.length > 60 && /[\u4e00-\u9fff]/.test(value))) kind='textarea' // 提示词用大输入框
         else if (/^(prompt|positive_prompt|negative_prompt|caption|positive_text|negative_text)$/i.test(name)) kind='textarea'
@@ -772,6 +776,7 @@ onMounted(() => {
   loadGenSettings()
   loadWorkflows()
   refreshHistory()
+  $fetch('/api/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
   window.addEventListener('keydown', onKeydown)
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
