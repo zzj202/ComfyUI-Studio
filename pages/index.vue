@@ -214,7 +214,7 @@
             </div>
             <div v-if="promptText(item)" class="result-prompt" :title="promptText(item)">{{ promptText(item) }}</div>
             <div class="result-foot">
-              <button v-if="hasPrompts(item)" class="btn mini" title="将这条记录的提示词与 seed 一键填回上方输入框" @click="applyPrompt(item)">🔁 复用提示词+Seed</button>
+              <button class="btn mini" title="读取该资产提交时的完整工作流：自动匹配工作流，还原所有参数（提示词/seed/分辨率/时长/LoRA）与参考图" @click="applyAssetParams(item)">♻️ 复用全部参数</button>
               <span v-if="fmtDur(item.durationMs)" class="time-chip" title="生成耗时">⏱ {{ fmtDur(item.durationMs) }}</span>
               <span class="fn" :title="item.promptId">{{ item.outputs.length }} 个 · {{ item.promptId.slice(0, 8) }}…</span>
               <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0], true)" :download="item.outputs[0].filename">下载</a>
@@ -224,6 +224,9 @@
       </div>
       </div>
     </main>
+
+    <!-- 轻提示 -->
+    <div v-if="toast" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e2235;color:#fff;padding:10px 20px;border-radius:12px;font-size:13px;z-index:200;box-shadow:0 8px 30px rgba(0,0,0,.25);pointer-events:none">{{ toast }}</div>
 
     <!-- 大图预览灯箱 -->
     <div v-if="viewer" class="lightbox" @click.self="viewer = null">
@@ -662,46 +665,88 @@ function clearHistory() {
   saveCleared()
   history.value = []
 }
-// 历史提示词：摘要展示（仅文本）+ 一键复用（文本+seed）
+// ===== 资产全参数复用 =====
+// 资产提示词摘要展示（仅文本）
 function promptText(item: any): string {
   return Object.entries<any>(item?.prompts || {})
     .filter(([, v]) => typeof v === 'string')
     .map(([, v]) => v)
     .join(' / ')
 }
-function hasPrompts(item: any): boolean {
-  return !!item?.prompts && Object.keys(item.prompts).length > 0
+// 读取资产提交时的完整工作流图（/api/asset-params）：自动匹配本地工作流 → 精确还原所有参数 + seed 复用中 + 参考图
+const applyingParams = ref(false)
+const toast = ref('')
+let toastTimer: any = null
+function showToast(msg: string) {
+  toast.value = msg
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = '' }, 2800)
 }
-function applyPrompt(item: any) {
-  const prompts = item?.prompts || {}
-  // 按输入名分组历史值：文本池 + seed
-  const textsByName: Record<string, string[]> = {}
-  let seedVal: number | null = null
-  for (const [k, v] of Object.entries<any>(prompts)) {
-    const name = k.split('.').pop() || ''
-    if (typeof v === 'string' && v.trim()) (textsByName[name] ||= []).push(v)
-    else if (typeof v === 'number' && /seed/i.test(name)) seedVal = v
+const wfGraphCache = new Map<string, any>()
+
+async function applyAssetParams(item: any) {
+  if (applyingParams.value) return
+  applyingParams.value = true
+  try {
+    const res: any = await $fetch('/api/asset-params', { params: { promptId: item.promptId } })
+    const g = res?.graph
+    if (!g || !Object.keys(g).length) { showToast('该资产没有可读取的提交参数'); return }
+
+    // ① 自动匹配最相似的本地工作流（按 节点ID+class_type 重合度打分），必要时自动切换
+    let best: { file: string; score: number } | null = null
+    for (const w of workflows.value.filter(x => !x.broken)) {
+      let wg: any = wfGraphCache.get(w.file)
+      if (!wg) {
+        try { wg = await $fetch(`/api/workflows/${encodeURIComponent(w.file)}`); wfGraphCache.set(w.file, wg) }
+        catch { continue }
+      }
+      let score = 0
+      for (const [nid, node] of Object.entries<any>(g)) {
+        if (wg?.[nid]?.class_type === node?.class_type) score++
+      }
+      if (!best || score > best.score) best = { file: w.file, score }
+    }
+    const total = Object.keys(g).length
+    if (best && best.file !== selectedFile.value && best.score >= total * 0.5) {
+      const wf = workflows.value.find(w => w.file === best!.file)
+      if (wf) { await selectWorkflow(wf); showToast(`已切换到该资产的工作流：${wf.name}`) }
+    }
+
+    // ② 按「节点ID.字段名」精确还原所有参数（提示词/分辨率/时长/LoRA/强度等一切输入）
+    let n = 0
+    for (const f of fields.value) {
+      const v = g?.[f.nodeId]?.inputs?.[f.name]
+      if (v === undefined || v === null || Array.isArray(v)) continue
+      form[f.uid] = v
+      n++
+    }
+    // ③ seed 进入「复用中」：本批固定该 seed，本会话批次全部结束后自动恢复随机
+    const sf = seedField.value
+    if (sf) {
+      const sv = g?.[sf.nodeId]?.inputs?.[sf.name]
+      if (typeof sv === 'number') { fixedSeedVal.value = sv; seedReuseActive.value = true; n++ }
+    }
+    // ④ 还原参考图：LoadImage 按标题自然排序（与后端槽位顺序一致），src 走 /api/view 代理
+    const loadNodes = Object.entries<any>(g)
+      .filter(([, node]) => node?.class_type === 'LoadImage' && typeof node?.inputs?.image === 'string')
+      .sort((a, b) => String(a[1]?._meta?.title || '').localeCompare(String(b[1]?._meta?.title || ''), 'zh-Hans-CN', { numeric: true }))
+    const restored: QueuedImg[] = loadNodes.map(([nid, node]) => {
+      const raw = String(node.inputs.image)
+      const idx = raw.lastIndexOf('/')
+      const filename = idx >= 0 ? raw.slice(idx + 1) : raw
+      const subfolder = idx >= 0 ? raw.slice(0, idx) : ''
+      const q = new URLSearchParams({ filename, type: 'input' })
+      if (subfolder) q.set('subfolder', subfolder)
+      return { id: `${nid}-${Date.now().toString(36)}`, name: filename, src: `/api/view?${q}`, serverName: raw }
+    })
+    if (restored.length) images.value = restored
+    saveSession()
+    showToast(`✅ 已复用该资产全部参数：${n} 项参数${restored.length ? ` + ${restored.length} 张参考图` : ''}`)
+  } catch (e: any) {
+    showToast(e?.data?.message || e?.message || '读取资产参数失败')
+  } finally {
+    applyingParams.value = false
   }
-  let n = 0
-  // 文本：按输入名匹配当前工作流的同名字段（textarea 优先），多值按字段顺序依次填
-  for (const [name, vals] of Object.entries(textsByName)) {
-    const targets = fields.value.filter(f => f.name === name && (f.kind === 'textarea' || f.kind === 'text'))
-    targets.forEach((f, i) => { if (i < vals.length) { form[f.uid] = vals[i]; n++ } })
-  }
-  // 兜底：没有同名字段时，把第一条文本填进第一个提示词框
-  if (!n) {
-    const firstTextarea = fields.value.find(f => f.kind === 'textarea')
-    const firstText = Object.values<any>(prompts).find(v => typeof v === 'string' && v.trim())
-    if (firstTextarea && firstText) { form[firstTextarea.uid] = firstText; n++ }
-  }
-  // seed：填入复用 seed，勾选保持「每单自动随机 seed」不动，显示「复用中」标记
-  // 复用中：提交时这批全部用该 seed；本会话批次全部结束后自动恢复随机
-  if (seedVal != null) {
-    fixedSeedVal.value = seedVal
-    seedReuseActive.value = true
-    n++
-  }
-  if (n) scheduleFormSave()
 }
 // 复用中状态：批次全部结束后恢复随机
 const seedReuseActive = ref(false)
