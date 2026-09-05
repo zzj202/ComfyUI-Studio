@@ -103,28 +103,31 @@
 
         <!-- 生成控制 -->
         <div class="gen-options">
-          <div class="field">
-            <label>批次（每张图跑几单）</label>
-            <div class="seed-row">
-              <input type="number" min="1" max="50" v-model.number="batchCount" />
-              <button class="btn small" :disabled="busy" @click="submitBatch">▶ 开始批量生成</button>
-              <button v-if="activeBatch" class="btn small danger" :disabled="!activeBatch" @click="stopBatch">⏹ 停止</button>
+          <div class="gen-row">
+            <div class="gen-block grow">
+              <label>批次（每张图跑几单）</label>
+              <div class="seed-row">
+                <input type="number" min="1" max="50" v-model.number="batchCount" />
+                <div class="quick-row">
+                  <button v-for="n in [1,2,3,4]" :key="n" class="btn quick" :class="{ on: batchCount===n }" @click="batchCount=n">{{ n }}</button>
+                </div>
+              </div>
             </div>
-            <div class="quick-row">
-              <span class="muted" style="font-size:12px">快速选择：</span>
-              <button v-for="n in [1,2,3,4]" :key="n" class="btn quick" :class="{ on: batchCount===n }" @click="batchCount=n">{{ n }}</button>
+            <div class="gen-block grow">
+              <label class="inline-label">
+                <input type="checkbox" v-model="autoRandSeed" />
+                每单自动随机 seed
+              </label>
+              <div v-if="!autoRandSeed" class="seed-row" style="margin-top:6px">
+                <input type="number" v-model.number="fixedSeedVal" placeholder="所有单复用这个 seed" />
+              </div>
             </div>
           </div>
 
-          <div class="field">
-            <label class="inline-label">
-              <input type="checkbox" v-model="autoRandSeed" />
-              每单自动随机 seed
-            </label>
-            <div v-if="!autoRandSeed && seedValue != null" class="field" style="margin-top:6px">
-              <label>固定 seed（复现用）</label>
-              <input type="number" v-model.number="fixedSeedVal" />
-            </div>
+          <div class="gen-actions">
+            <span class="plan" :class="{ warn: !canSubmit }">{{ planText }}</span>
+            <button class="btn primary" :disabled="busy || !canSubmit" @click="submitBatch">▶ 开始批量生成</button>
+            <button v-if="activeBatch && !activeBatch.finishedAt" class="btn small danger" @click="stopBatch">⏹ 停止</button>
           </div>
         </div>
 
@@ -145,7 +148,7 @@
         <div class="grid">
           <div v-for="(r, i) in batchDoneOutputs" :key="i" class="result-item">
             <div class="result-media">
-              <img v-if="r.kind === 'image'" :src="r.src" loading="lazy" />
+              <img v-if="r.kind === 'image'" :src="r.src" loading="lazy" @click="openViewer(r.src, r.filename, 'image')" />
               <video v-else-if="r.kind === 'video'" :src="r.src" controls preload="metadata" />
               <div v-else class="muted" style="padding:12px">不支持预览</div>
             </div>
@@ -169,13 +172,13 @@
           <div v-for="item in history" :key="item.promptId" class="result-item">
             <div class="result-media">
               <template v-if="item.outputs.length">
-                <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0], true)" loading="lazy" />
+                <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0], true)" loading="lazy" @click="openViewer(mediaUrl(item.outputs[0], true), item.outputs[0].filename, 'image')" />
                 <video v-else-if="item.outputs[0].kind === 'video'" :src="mediaUrl(item.outputs[0], true)" controls preload="metadata" />
               </template>
             </div>
             <div v-if="promptText(item)" class="result-prompt" :title="promptText(item)">{{ promptText(item) }}</div>
             <div class="result-foot">
-              <button v-if="hasPrompts(item)" class="btn mini" title="将这条记录的提示词填回上方输入框" @click="applyPrompt(item)">🔁 复用提示词</button>
+              <button v-if="hasPrompts(item)" class="btn mini" title="将这条记录的提示词与 seed 一键填回上方输入框" @click="applyPrompt(item)">🔁 复用提示词+Seed</button>
               <span class="fn" :title="item.promptId">{{ item.outputs.length }} 个 · {{ item.promptId.slice(0, 8) }}…</span>
               <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0], true)" :download="item.outputs[0].filename">下载</a>
             </div>
@@ -183,6 +186,17 @@
         </div>
       </div>
     </main>
+
+    <!-- 大图预览灯箱 -->
+    <div v-if="viewer" class="lightbox" @click.self="viewer = null">
+      <button class="lb-x" title="关闭" @click="viewer = null">✕</button>
+      <img v-if="viewer.kind === 'image'" :src="viewer.src" :alt="viewer.filename" />
+      <video v-else :src="viewer.src" controls autoplay></video>
+      <div class="lb-bar">
+        <span class="fn">{{ viewer.filename }}</span>
+        <a class="btn small" :href="viewer.src" :download="viewer.filename">⬇ 下载原图</a>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -297,7 +311,8 @@ function extractFields(g: any): FieldDef[] {
       else if (typeof value === 'string') {
         if (name === 'sampler_name') { kind='select'; options=SAMPLERS }
         else if (name === 'scheduler') { kind='select'; options=SCHEDULERS }
-        else if (/^(text|prompt|positive_prompt|negative_prompt|caption|positive_text|negative_text)$/i.test(name)) kind='textarea'
+        else if (/^(text|prompt|positive_prompt|negative_prompt|caption|positive_text|negative_text|text_0)$/i.test(name)) kind='textarea'
+        else if (value.includes('\n')) kind='textarea' // 多行文本（分段提示词等）用大输入框
         else kind='text'
       }
       out.push({ uid, nodeId, name, label, kind, options, step, isSeed, original: value })
@@ -528,21 +543,67 @@ function clearHistory() {
   saveCleared()
   history.value = []
 }
-// 历史提示词：摘要展示 + 一键复用
+// 历史提示词：摘要展示（仅文本）+ 一键复用（文本+seed）
 function promptText(item: any): string {
-  const vals = Object.values<string>(item?.prompts || {})
-  return vals.join(' / ')
+  return Object.entries<any>(item?.prompts || {})
+    .filter(([, v]) => typeof v === 'string')
+    .map(([, v]) => v)
+    .join(' / ')
 }
 function hasPrompts(item: any): boolean {
   return !!item?.prompts && Object.keys(item.prompts).length > 0
 }
 function applyPrompt(item: any) {
+  const prompts = item?.prompts || {}
+  // 按输入名分组历史值：文本池 + seed
+  const textsByName: Record<string, string[]> = {}
+  let seedVal: number | null = null
+  for (const [k, v] of Object.entries<any>(prompts)) {
+    const name = k.split('.').pop() || ''
+    if (typeof v === 'string' && v.trim()) (textsByName[name] ||= []).push(v)
+    else if (typeof v === 'number' && /seed/i.test(name)) seedVal = v
+  }
   let n = 0
-  for (const [k, v] of Object.entries<any>(item?.prompts || {})) {
-    if (k in form) { form[k] = v; n++ }
+  // 文本：按输入名匹配当前工作流的同名字段（textarea 优先），多值按字段顺序依次填
+  for (const [name, vals] of Object.entries(textsByName)) {
+    const targets = fields.value.filter(f => f.name === name && (f.kind === 'textarea' || f.kind === 'text'))
+    targets.forEach((f, i) => { if (i < vals.length) { form[f.uid] = vals[i]; n++ } })
+  }
+  // 兜底：没有同名字段时，把第一条文本填进第一个提示词框
+  if (!n) {
+    const firstTextarea = fields.value.find(f => f.kind === 'textarea')
+    const firstText = Object.values<any>(prompts).find(v => typeof v === 'string' && v.trim())
+    if (firstTextarea && firstText) { form[firstTextarea.uid] = firstText; n++ }
+  }
+  // seed：填入当前工作流的 seed 字段，并切到固定 seed 模式（否则随机开关会覆盖它）
+  if (seedVal != null && seedField.value) {
+    form[seedField.value.uid] = seedVal
+    autoRandSeed.value = false
+    fixedSeedVal.value = seedVal
+    n++
   }
   if (n) scheduleFormSave()
 }
+
+// ===== 大图预览 =====
+const viewer = ref<{ src: string; filename: string; kind: 'image' | 'video' } | null>(null)
+function openViewer(src: string, filename: string, kind: 'image' | 'video' = 'image') {
+  viewer.value = { src, filename, kind }
+}
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') viewer.value = null
+}
+
+// ===== 生成计划提示 =====
+const validImageCount = computed(() => images.value.filter(i => i.serverName).length)
+const canSubmit = computed(() => validImageCount.value > 0 && !!graph.value)
+const planText = computed(() => {
+  if (!graph.value) return '请先在左侧选择工作流'
+  const n = validImageCount.value
+  if (!n) return '请先上传参考图'
+  const total = n * (batchCount.value || 1)
+  return `将生成 ${total} 张（${n} 张参考图 × ${batchCount.value} 批）`
+})
 function mediaUrl(r:any, bust=false) {
   const q = new URLSearchParams({ filename:r.filename, subfolder:r.subfolder||'', type:r.type||'output' })
   if (bust) q.append('cache','0')
@@ -557,5 +618,26 @@ function runningOnWorkflow(file:string){
 watch(images, () => { if (selectedFile.value) saveSession() }, { deep: true })
 watch(form, () => scheduleFormSave(), { deep: true })
 
-onMounted(()=>{ loadWorkflows(); refreshHistory() })
+// 生成设置（批次/随机开关/固定seed）跨刷新保留
+const GEN_KEY = 'genSettings:v1'
+watch([batchCount, autoRandSeed, fixedSeedVal], () => {
+  try { localStorage.setItem(GEN_KEY, JSON.stringify({ batchCount: batchCount.value, autoRandSeed: autoRandSeed.value, fixedSeedVal: fixedSeedVal.value })) } catch {}
+})
+function loadGenSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(GEN_KEY) || 'null')
+    if (!s) return
+    if (typeof s.batchCount === 'number' && s.batchCount >= 1) batchCount.value = s.batchCount
+    if (typeof s.autoRandSeed === 'boolean') autoRandSeed.value = s.autoRandSeed
+    if (typeof s.fixedSeedVal === 'number') fixedSeedVal.value = s.fixedSeedVal
+  } catch {}
+}
+
+onMounted(() => {
+  loadGenSettings()
+  loadWorkflows()
+  refreshHistory()
+  window.addEventListener('keydown', onKeydown)
+})
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>

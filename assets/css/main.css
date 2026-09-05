@@ -283,10 +283,48 @@ textarea { resize: vertical; min-height: 64px; }
 /* 生成控制 */
 .gen-options {
   margin-top: 4px;
-  padding: 12px; border-top: 1px dashed var(--border);
+  padding: 14px; border-top: 1px dashed var(--border);
 }
-.gen-options .field { margin-bottom: 12px; }
-.inline-label { display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; }
+.gen-row { display: flex; gap: 18px; flex-wrap: wrap; }
+.gen-block { min-width: 220px; }
+.gen-block.grow { flex: 1; }
+.gen-block .inline-label { margin-bottom: 0; }
+.inline-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+.inline-label input[type="checkbox"] { width: auto; }
+.gen-actions {
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.gen-actions .plan { flex: 1; font-size: 13px; color: var(--muted); min-width: 160px; }
+.gen-actions .plan.warn { color: var(--amber); }
+.gen-actions .btn.primary { margin-left: auto; }
+.gen-block .seed-row input[type="number"] { max-width: 130px; }
+
+/* 大图预览灯箱 */
+.lightbox {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(10, 15, 28, 0.88);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 30px;
+  cursor: zoom-out;
+}
+.lightbox img, .lightbox video {
+  max-width: 92vw; max-height: 80vh;
+  border-radius: 10px; box-shadow: 0 24px 80px rgba(0,0,0,.5);
+  cursor: default;
+}
+.lb-x {
+  position: absolute; top: 16px; right: 20px;
+  width: 36px; height: 36px; border: none; border-radius: 50%;
+  background: rgba(255,255,255,.14); color: #fff; font-size: 15px; cursor: pointer;
+}
+.lb-x:hover { background: rgba(255,255,255,.28); }
+.lb-bar {
+  display: flex; align-items: center; gap: 12px;
+  max-width: 92vw; color: #e2e8f0; font-size: 12px;
+}
+.lb-bar .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-media img { cursor: zoom-in; }
 
 .btn.danger { border-color: #fecaca; color: var(--red); }
 .btn.danger:hover { background: #fef2f2; color: var(--red); border-color: var(--red); }

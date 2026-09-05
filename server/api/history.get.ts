@@ -25,15 +25,19 @@ export default defineEventHandler(async (event) => {
   }
 })
 
-/** 提取提交图中的文本类输入（提示词），uid 与前端表单一致："nodeId.inputName" */
-function extractPrompts(entry: any): Record<string, string> {
+/** 提取提交图中的文本类输入（提示词）与 seed，uid 与前端表单一致："nodeId.inputName" */
+function extractPrompts(entry: any): Record<string, any> {
   const graph = entry?.prompt?.[2] || {}
-  const out: Record<string, string> = {}
+  const out: Record<string, any> = {}
   for (const [nodeId, node] of Object.entries<any>(graph)) {
     const inputs = node?.inputs || {}
     for (const [name, value] of Object.entries<any>(inputs)) {
       // 文本输入：常见为 CLIPTextEncode 的 text，以及名字带 prompt/caption 的字符串
       if (typeof value === 'string' && value.trim() && (name === 'text' || /prompt|caption|query/i.test(name))) {
+        out[`${nodeId}.${name}`] = value
+      }
+      // seed（含 noise_seed 等），用于一键复现
+      else if (typeof value === 'number' && /seed/i.test(name)) {
         out[`${nodeId}.${name}`] = value
       }
     }
