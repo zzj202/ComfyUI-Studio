@@ -564,17 +564,33 @@ function ensurePolling() {
   if (pollTimer.value) return
   pollTimer.value = setInterval(pollAll, 1500)
 }
+// 已刷新进最近产出的 promptId，用于识别「新完成的资产」并实时刷新
+const seenDoneIds = new Set<string>()
+function collectDoneIds(b: any): Set<string> {
+  const s = new Set<string>()
+  for (const it of (b?.items || [])) if (it.status === 'done' && it.promptId) s.add(it.promptId)
+  return s
+}
 async function pollAll() {
   const unfinished = sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled)
   if (!unfinished.length) { stopPolling(); return }
+  let newlyDone = false
+  let anyFinished = false
   for (const b of unfinished) {
     try {
       const info: any = await $fetch(`/api/batch/${b.id}`)
       if (info.exists === false) { b.finishedAt = b.finishedAt || Date.now(); continue }
+      const before = collectDoneIds(b)
       Object.assign(b, info)
-      if (info.finishedAt) { maybeRestoreSeed(); refreshHistory() }
+      // 新完成的单 → 立即刷新最近产出（不等整批结束）
+      for (const id of collectDoneIds(b)) {
+        if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
+      }
+      if (info.finishedAt) { anyFinished = true; maybeRestoreSeed() }
     } catch { /* 网络抖动忽略 */ }
   }
+  if (newlyDone) refreshHistory()
+  if (anyFinished) stopPolling()
 }
 function stopPolling() {
   if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
@@ -631,7 +647,8 @@ function saveCleared() {
 }
 async function refreshHistory() {
   try {
-    const res:any = await $fetch('/api/history?max=30')
+    // max=100：窗口要足够大，避免新产出把旧产出挤出窗口导致「看起来没更新」
+    const res:any = await $fetch('/api/history?max=100')
     history.value = (res.items||[]).filter((it:any) => !clearedIds.has(it.promptId))
   }
   catch { /* 连接失败静默 */ }
