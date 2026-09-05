@@ -1,0 +1,247 @@
+// comfyBase / readWorkflowFile / normalizeOutputs 由 Nuxt 对 server/utils 自动导入
+
+// ------- 常量 -------
+const POLL_MS = 1000        // 轮询单 prompt 完成间隔
+const MAX_ITEM_MS = 15 * 60 * 1000
+const AUTO_POLL_INTERVAL = 4000 // runloop 主动轮询已提交 items 的间隔
+
+export interface BatchItem {
+  id: string
+  image: string        // 该单使用的参考图文件名
+  seed: number | null
+  status: 'pending' | 'running' | 'done' | 'error'
+  promptId?: string
+  outputs: { filename: string; subfolder: string; type: string; kind: string }[]
+  error?: string
+}
+
+export interface BatchJob {
+  id: string
+  workflow: string
+  baseOverrides: Record<string, Record<string, any>>
+  imageNodeId: string       // LoadImage 节点 id
+  seedNodeId: string | null // seed 字段所在节点 id
+  seedKey: string | null
+  images: string[]
+  batch: number
+  randSeed: boolean
+  clientId: string
+  items: BatchItem[]
+  startedAt: number
+  finishedAt?: number
+  cancelled?: boolean
+}
+
+const jobs = new Map<string, BatchJob>()
+
+export function genId(prefix = 'b') {
+  return `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+}
+
+export function getBatchInfo(id: string) {
+  const j = jobs.get(id)
+  if (!j) return null
+  return {
+    id: j.id,
+    workflow: j.workflow,
+    randSeed: j.randSeed,
+    images: j.images,
+    batch: j.batch,
+    startedAt: j.startedAt,
+    finishedAt: j.finishedAt,
+    cancelled: j.cancelled,
+    items: j.items.map((it) => ({
+      id: it.id,
+      image: it.image,
+      seed: it.seed,
+      status: it.status,
+      promptId: it.promptId,
+      error: it.error,
+      outputCount: it.outputs.length
+    }))
+  }
+}
+
+export function batchExists(id: string) {
+  return jobs.has(id)
+}
+
+export function stopBatch(id: string) {
+  const j = jobs.get(id)
+  if (j) j.cancelled = true
+}
+
+export function disposeBatch(id: string) {
+  jobs.delete(id)
+}
+
+/** 预生成 items 顺序 = images × batch（每张图跑 batch 单，每单一个独立 seed） */
+function planItems(job: BatchJob) {
+  for (const img of job.images) {
+    for (let n = 0; n < job.batch; n++) {
+      job.items.push({
+        id: genId('t'),
+        image: img,
+        seed: job.randSeed ? Math.floor(Math.random() * 1e15) : null,
+        status: 'pending',
+        outputs: []
+      })
+    }
+  }
+}
+
+export interface CreateBatchInput {
+  workflow: string
+  baseOverrides: Record<string, Record<string, any>>
+  imageNodeId: string
+  images: string[]
+  batch: number
+  randSeed: boolean
+  fixedSeed: number | null
+  seedNodeId: string | null
+  seedKey: string | null
+  clientId: string
+}
+
+/** 创建批量任务（不立即跑，交给 /batch 的 runloop / SSE 触发） */
+export function createBatch(input: CreateBatchInput) {
+  const job: BatchJob = {
+    id: genId('batch'),
+    workflow: input.workflow,
+    baseOverrides: structuredClone(input.baseOverrides),
+    imageNodeId: input.imageNodeId,
+    seedNodeId: input.seedNodeId,
+    seedKey: input.seedKey,
+    images: input.images,
+    batch: Math.max(1, input.batch),
+    randSeed: input.randSeed,
+    clientId: input.clientId,
+    startedAt: Date.now(),
+    items: []
+  }
+  // 固定种子模式：所有单共用 fixedSeed
+  planItems(job)
+  if (!job.randSeed) {
+    for (const it of job.items) it.seed = input.fixedSeed ?? null
+  }
+  jobs.set(job.id, job)
+  return job
+}
+
+function buildGraph(job: BatchJob, item: BatchItem): { ok: true; graph: any } | { ok: false; error: string } {
+  const res = readWorkflowFile(job.workflow)
+  if (!res.ok) return res
+  const graph = structuredClone(res.graph) as any
+  // 应用基础覆盖
+  for (const [nid, fields] of Object.entries<any>(job.baseOverrides)) {
+    if (!graph[nid]) continue
+    graph[nid].inputs = { ...graph[nid].inputs, ...fields }
+  }
+  // 覆盖 image
+  if (graph[job.imageNodeId]) graph[job.imageNodeId].inputs.image = item.image
+  // 覆盖 seed
+  if (item.seed !== null && job.seedNodeId && job.seedKey && graph[job.seedNodeId]) {
+    graph[job.seedNodeId].inputs[job.seedKey] = item.seed
+  }
+  return { ok: true, graph }
+}
+
+/** 提交单张图，等待完成后回填 outputs */
+export async function runItem(job: BatchJob, item: BatchItem) {
+  const base = comfyBase()
+  if (!item.image) {
+    item.status = 'error'
+    item.error = '缺少参考图，已跳过'
+    return
+  }
+  const g = buildGraph(job, item)
+  if (!g.ok) {
+    item.status = 'error'
+    item.error = g.error
+    return
+  }
+  item.status = 'running'
+  // 提交 /prompt：瞬时网络抖动做指数重试，避免一次抖动毁掉整批
+  let promptRes: any
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    if (job.cancelled) {
+      item.status = 'pending'
+      return
+    }
+    try {
+      promptRes = await $fetch(`${base}/prompt`, {
+        method: 'POST',
+        body: { prompt: g.graph, client_id: job.clientId },
+        timeout: 30000
+      })
+      break
+    } catch (e: any) {
+      lastErr = e
+      if (attempt < 4) await new Promise((r) => setTimeout(r, attempt * 1500))
+    }
+  }
+  if (!promptRes?.prompt_id) {
+    item.status = 'error'
+    item.error = `提交失败：${lastErr?.data?.error?.message || lastErr?.message || lastErr}`
+    return
+  }
+  item.promptId = promptRes.prompt_id
+  const pid = item.promptId
+  const start = Date.now()
+  // 轮询完成（阻塞该 item，直到成功/失败/取消）
+  for (;;) {
+      if (job.cancelled) {
+        item.status = 'pending' // 标记为未完成，由 runloop 略过
+        return
+      }
+      if (Date.now() - start > MAX_ITEM_MS) {
+        item.status = 'error'
+        item.error = '执行超时'
+        return
+      }
+      try {
+        const h: any = await $fetch(`${base}/history/${pid}`, { timeout: 5000 })
+        const entry = h?.[pid]
+        if (entry?.status?.status_str === 'success' || entry?.status?.completed) {
+          item.status = 'done'
+          item.outputs = normalizeOutputs(entry)
+          return
+        }
+        if (entry?.status?.status_str === 'error') {
+          item.status = 'error'
+          item.error =
+            entry?.status?.messages?.map((m: any) => (Array.isArray(m) ? m[1] : m)).join('; ') || '执行失败'
+          return
+        }
+      } catch {
+        /* 网络抖动，继续轮询 */
+      }
+      await new Promise((r) => setTimeout(r, POLL_MS))
+    }
+}
+
+/** runloop：逐个拿 pending/running item，直到全部非 pending 或取消 */
+export async function runBatchLoop(job: BatchJob) {
+  while (!job.cancelled) {
+    const item = job.items.find((it) => it.status === 'pending')
+    if (!item) break
+    await runItem(job, item)
+    if (job.cancelled) break
+  }
+  if (job.cancelled) {
+    // 把 pending 的置 skipped 视觉（无此态则保持 pending）
+    for (const it of job.items) if (it.status === 'pending') it.status = 'pending'
+  }
+  job.finishedAt = Date.now()
+}
+
+export function batchRunningCount(job: BatchJob) {
+  return job.items.filter((it) => it.status === 'running' || it.status === 'pending').length
+}
+export function batchDoneCount(job: BatchJob) {
+  return job.items.filter((it) => it.status === 'done').length
+}
+export function batchErrorCount(job: BatchJob) {
+  return job.items.filter((it) => it.status === 'error').length
+}

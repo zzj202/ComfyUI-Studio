@@ -1,0 +1,15 @@
+# Nuxt
+node_modules/
+.nuxt/
+.output/
+.data/
+dist/
+
+# 本地配置（含 ComfyUI 服务器地址等私有信息）
+.env
+data/
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
