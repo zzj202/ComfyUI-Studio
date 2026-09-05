@@ -71,7 +71,7 @@
                 <img :src="img.src" alt="参考图" loading="lazy" />
                 <span v-if="uploadingId === img.id" class="img-uploading">上传中…</span>
                 <button class="img-x" title="移除" @click.stop="removeImage(idx)">✕</button>
-                <span v-if="batchIndex.includes(idx)" class="img-idx">{{ batchIndex.indexOf(idx) + 1 }}</span>
+                <span v-if="batchIndex.includes(idx)" class="img-idx" :title="slotBadgeTitle(idx)">{{ slotBadge(idx) }}</span>
               </div>
               <div class="img-name" :title="img.name">{{ img.name }}</div>
             </div>
@@ -475,6 +475,17 @@ function dropAt(targetIdx: number) {
   dragIdx.value = null
 }
 const batchIndex = computed(()=>images.value.map((_,i)=>i)) // 简单标记全部参与
+/** 多槽位工作流角标：显示组内槽位（P1/P2/P3），悬浮提示第几组 */
+function slotBadge(idx: number): string {
+  const slots = imageSlots.value
+  if (!isVideoWf.value || slots <= 1) return String(idx + 1)
+  return `P${(idx % slots) + 1}`
+}
+function slotBadgeTitle(idx: number): string {
+  const slots = imageSlots.value
+  if (!isVideoWf.value || slots <= 1) return `第 ${idx + 1} 张参与生成`
+  return `第 ${Math.floor(idx / slots) + 1} 组 · Picture ${(idx % slots) + 1}`
+}
 
 // 一键清空：参考图 / 提示词
 function clearImages() {
