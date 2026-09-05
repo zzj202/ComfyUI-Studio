@@ -1,38 +1,38 @@
 <template>
   <div class="layout">
-    <!-- 侧栏：工作流列表 -->
-    <aside class="side">
-      <div class="card">
-        <h2>📂 工作流</h2>
-        <div v-if="workflows.length === 0" class="empty">暂无工作流</div>
+    <!-- 顶栏：工作流选择（横向） -->
+    <div class="wf-bar card">
+      <div class="wf-bar-title">📂 工作流</div>
+      <div class="wf-chips">
         <div
           v-for="wf in workflows"
           :key="wf.file"
-          class="wf-item"
-          :class="{ active: wf.file === selectedFile }"
+          class="wf-chip"
+          :class="{ active: wf.file === selectedFile, broken: wf.broken }"
           @click="selectWorkflow(wf)"
         >
-          <div class="wf-name">{{ wf.name }}</div>
-          <div class="wf-meta">
-            {{ wf.nodeCount }} 个节点
-            <span v-if="runningOnWorkflow(wf.file)" class="wf-badge">● 批量进行中</span>
-            <template v-else-if="wf.broken"> · JSON 解析失败</template>
-          </div>
+          <span class="wf-name">{{ wf.name }}</span>
+          <span class="wf-meta">
+            <template v-if="runningOnWorkflow(wf.file)">● 批量进行中</template>
+            <template v-else-if="wf.broken">JSON 解析失败</template>
+            <template v-else>{{ wf.nodeCount }} 节点</template>
+          </span>
         </div>
+        <span v-if="workflows.length === 0" class="empty" style="padding:0">暂无工作流</span>
       </div>
-      <div class="hint">
-        把 ComfyUI 导出(API) 的 json 放进 <code>server/workflows/</code> 即出现在左侧。多张参考图可拖拽排序，将<b>逐张×批次</b>自动连发。
-      </div>
-    </aside>
+      <div class="hint wf-bar-hint">把 ComfyUI 导出(API) 的 json 放进 <code>server/workflows/</code> 即出现在顶部。多张参考图可拖拽排序。</div>
+    </div>
 
-    <main>
+    <main class="cols">
+      <!-- 左栏：参数输入 -->
+      <div class="col">
       <!-- ① 参考图队列 -->
       <div class="card">
         <h2>
           🖼 参考图（{{ images.length }}）
           <button v-if="images.length" class="btn mini danger" @click="clearImages" style="margin-left:auto">清空</button>
         </h2>
-        <div v-if="!selectedFile" class="empty">← 先在左侧选择一个工作流</div>
+        <div v-if="!selectedFile" class="empty">↑ 先在顶部选择一个工作流</div>
         <template v-else>
           <div
             class="dropzone"
@@ -82,11 +82,13 @@
 
       <!-- ② 常用参数 & 高级参数 & 提示词 & 生成设置 -->
       <div class="card">
-        <!-- 常用参数（常驻展示） -->
+        <!-- 常用参数（常驻展示，一行排列） -->
         <div v-if="commonFields.length" class="node-group common">
           <div class="group-title">🎛 常用参数</div>
-          <div v-for="f in commonFields" :key="f.uid" class="field">
-            <FieldControl :field="f" v-model="form[f.uid]" />
+          <div class="common-row">
+            <div v-for="f in commonFields" :key="f.uid" class="field">
+              <FieldControl :field="f" v-model="form[f.uid]" />
+            </div>
           </div>
         </div>
 
@@ -172,7 +174,10 @@
         </div>
         <div v-if="progress.status === 'error'" class="status-line error" style="margin-top:8px">{{ progress.message }}</div>
       </div>
+      </div>
 
+      <!-- 右栏：产出 -->
+      <div class="col">
       <!-- ③ 本批结果 -->
       <div class="card" v-if="batchDoneOutputs.length">
         <h2>✨ 本次批量结果（{{ batchDoneOutputs.length }}）</h2>
@@ -215,6 +220,7 @@
             </div>
           </div>
         </div>
+      </div>
       </div>
     </main>
 
