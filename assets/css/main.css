@@ -184,7 +184,6 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
-.batch-result-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; }
 .col-output .card.history-card {
   flex: 1;
   min-height: 0;
@@ -193,7 +192,8 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
-.history-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; grid-auto-rows: 232px; }
+.history-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; grid-auto-rows: 236px; } /* media158 + 摘要/foot */
+.batch-result-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; grid-auto-rows: 200px; } /* media158 + foot（行高必须显式，见塌陷注释） */
 .history-card .empty { flex-shrink: 0; }
 
 /* 细滚动条 */
@@ -426,11 +426,14 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.3, 1), box-shadow 0.18s;
 }
 .result-item:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+/* 16:9 展示区（280px 列宽 ≈ 158px 高）：固定高度避免 grid auto 行高的百分比塌陷；
+   视频用 contain 完整画面不裁切，图片仍 cover 填满 */
 .result-media {
-  background: #10131c; height: 150px; flex: 0 0 150px; overflow: hidden;
-  display: flex; align-items: center; justify-content: center;
+  background: #000; height: 158px; flex: 0 0 158px; overflow: hidden;
+  position: relative; display: block;
 }
-.result-media img, .result-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.result-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
+.result-media video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; cursor: pointer; }
 .result-foot {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 11px; gap: 8px;

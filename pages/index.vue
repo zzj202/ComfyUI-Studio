@@ -186,7 +186,7 @@
           <div v-for="(r, i) in batchDoneOutputs" :key="i" class="result-item">
             <div class="result-media">
               <img v-if="r.kind === 'image'" :src="r.src" loading="lazy" @click="openViewer(r.src, r.filename, 'image')" />
-              <video v-else-if="r.kind === 'video'" :src="r.src" controls preload="metadata" />
+              <video v-else-if="r.kind === 'video'" :src="r.src" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(r.src, r.filename, 'video')" />
               <div v-else class="muted" style="padding:12px">不支持预览</div>
             </div>
             <div class="result-foot">
@@ -211,7 +211,7 @@
             <div class="result-media">
               <template v-if="item.outputs.length">
                 <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0], true)" loading="lazy" @click="openViewer(mediaUrl(item.outputs[0], true), item.outputs[0].filename, 'image')" />
-                <video v-else-if="item.outputs[0].kind === 'video'" :src="mediaUrl(item.outputs[0], true)" controls preload="metadata" />
+                <video v-else-if="item.outputs[0].kind === 'video'" :src="mediaUrl(item.outputs[0], true)" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(mediaUrl(item.outputs[0], true), item.outputs[0].filename, 'video')" />
               </template>
             </div>
             <div v-if="promptText(item)" class="result-prompt" :title="promptText(item)">{{ promptText(item) }}</div>
@@ -234,7 +234,7 @@
     <div v-if="viewer" class="lightbox" @click.self="viewer = null">
       <button class="lb-x" title="关闭" @click="viewer = null">✕</button>
       <img v-if="viewer.kind === 'image'" :src="viewer.src" :alt="viewer.filename" />
-      <video v-else :src="viewer.src" controls autoplay></video>
+      <video v-else :src="viewer.src" controls autoplay loop></video>
       <div class="lb-bar">
         <span class="fn">{{ viewer.filename }}</span>
         <a class="btn small" :href="viewer.src" :download="viewer.filename">⬇ 下载原图</a>
@@ -778,6 +778,16 @@ function maybeRestoreSeed() {
 }
 
 // ===== 大图预览 =====
+// 网格视频悬停即播（静音循环），移开暂停复位——快速扫览对比挑选
+function hoverPlay(e: Event) {
+  const v = e.target as HTMLVideoElement
+  try { v.currentTime = 0 } catch {}
+  v.muted = true
+  v.play().catch(() => {})
+}
+function hoverPause(e: Event) {
+  ;(e.target as HTMLVideoElement).pause()
+}
 const viewer = ref<{ src: string; filename: string; kind: 'image' | 'video' } | null>(null)
 function openViewer(src: string, filename: string, kind: 'image' | 'video' = 'image') {
   viewer.value = { src, filename, kind }
