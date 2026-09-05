@@ -80,22 +80,8 @@
         </template>
       </div>
 
-      <!-- ② 提示词 & 常用参数 & 高级参数 & 生成设置 -->
+      <!-- ② 常用参数 & 高级参数 & 提示词 & 生成设置 -->
       <div class="card">
-        <template v-for="(row, ri) in promptRows" :key="'pr'+ri">
-          <div :class="['prompt-row', { multi: row.length > 1 }]">
-            <div v-for="group in row" :key="group.nodeId" class="node-group">
-              <div class="group-title row">
-                <span>✏️ {{ group.title }}</span>
-                <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
-              </div>
-              <div v-for="f in group.fields" :key="f.uid" class="field">
-                <FieldControl :field="f" v-model="form[f.uid]" :hide-label="group.fields.length === 1 && group.fields[0].label === group.title" />
-              </div>
-            </div>
-          </div>
-        </template>
-
         <!-- 常用参数（常驻展示） -->
         <div v-if="commonFields.length" class="node-group common">
           <div class="group-title">🎛 常用参数</div>
@@ -117,6 +103,22 @@
           </template>
         </div>
 
+        <!-- 提示词区（在高级参数下方）：首/尾一行，中独占一行 -->
+        <template v-for="(row, ri) in promptRows" :key="'pr'+ri">
+          <div :class="['prompt-row', { multi: row.length > 1 }]">
+            <div v-for="group in row" :key="group.nodeId" class="node-group">
+              <div class="group-title row">
+                <span>✏️ {{ group.title }}</span>
+                <button v-if="group.title.includes('中')" class="btn mini" title="把剪贴板内容粘贴到「中」提示词" @click="pastePromptGroup(group)">📋 粘贴</button>
+                <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
+              </div>
+              <div v-for="f in group.fields" :key="f.uid" class="field">
+                <FieldControl :field="f" v-model="form[f.uid]" :hide-label="group.fields.length === 1 && group.fields[0].label === group.title" />
+              </div>
+            </div>
+          </div>
+        </template>
+
         <!-- 生成控制 -->
         <div class="gen-options">
           <div class="gen-row">
@@ -136,6 +138,9 @@
               </label>
               <div v-if="!autoRandSeed" class="seed-row" style="margin-top:6px">
                 <input type="number" v-model.number="fixedSeedVal" placeholder="所有单复用这个 seed" />
+              </div>
+              <div v-else-if="seedReuseActive" class="seed-reuse" style="margin-top:6px">
+                🌱 复用中 seed：<b>{{ fixedSeedVal }}</b>（本批结束后恢复自动随机）
               </div>
             </div>
           </div>
@@ -464,6 +469,17 @@ function clearPromptGroup(group: { fields: FieldDef[] }) {
   for (const f of group.fields) form[f.uid] = f.kind === 'number' ? 0 : ''
   scheduleFormSave()
 }
+// 粘贴剪贴板内容到「中」提示词
+async function pastePromptGroup(group: { fields: FieldDef[] }) {
+  try {
+    const text = await navigator.clipboard.readText()
+    if (!text || !text.trim()) { alert('剪贴板为空'); return }
+    for (const f of group.fields) form[f.uid] = text.trim()
+    scheduleFormSave()
+  } catch {
+    alert('无法读取剪贴板（浏览器权限限制），请直接在输入框内 Ctrl+V 粘贴')
+  }
+}
 
 // ===== 批量生成（支持连续提交多批，互不阻塞）=====
 const submitting = ref(false) // 仅在提交请求期间短暂锁定
@@ -489,6 +505,8 @@ async function submitBatch() {
   if (!graph.value || submitting.value) return
 
   submitting.value = true
+  // 复用中：这批固定用复用的 seed；否则按勾选的随机模式
+  const useFixed = seedReuseActive.value || !autoRandSeed.value
   try {
     const res: any = await $fetch('/api/batch', {
       method:'POST',
@@ -497,8 +515,8 @@ async function submitBatch() {
         clientId,
         images: valid.map(i=>i.serverName!),
         batch: batchCount.value||1,
-        randSeed: autoRandSeed.value,
-        fixedSeed: autoRandSeed.value ? null : fixedSeedVal.value,
+        randSeed: !useFixed,
+        fixedSeed: useFixed ? fixedSeedVal.value : null,
         baseOverrides: buildBaseOverrides()
       }
     })
@@ -533,6 +551,7 @@ async function pollAll() {
 }
 function stopPolling() {
   if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
+  maybeRestoreSeed()
   refreshHistory()
 }
 async function stopBatch(id: string) {
@@ -551,6 +570,7 @@ function shortWf(file: string) {
 }
 function batchTextOf(b: any): string {
   const r = b?.items || []
+  if (!b.finishedAt && !b.cancelled && !b.loopStarted) return `排队中 · 共 ${r.length} 单`
   const done = r.filter((i:any)=>i.status==='done').length
   const err = r.filter((i:any)=>i.status==='error').length
   const run = r.filter((i:any)=>i.status==='running').length
@@ -626,21 +646,20 @@ function applyPrompt(item: any) {
     const firstText = Object.values<any>(prompts).find(v => typeof v === 'string' && v.trim())
     if (firstTextarea && firstText) { form[firstTextarea.uid] = firstText; n++ }
   }
-  // seed：填入当前工作流的 seed 字段，并切到固定 seed 模式（否则随机开关会覆盖它）
-  // 一次性复用：本批跑完自动切回「每单自动随机」
-  if (seedVal != null && seedField.value) {
-    form[seedField.value.uid] = seedVal
-    autoRandSeed.value = false
+  // seed：填入复用 seed，勾选保持「每单自动随机 seed」不动，显示「复用中」标记
+  // 复用中：提交时这批全部用该 seed；本会话批次全部结束后自动恢复随机
+  if (seedVal != null) {
     fixedSeedVal.value = seedVal
-    oneShotSeed = true
+    seedReuseActive.value = true
     n++
   }
   if (n) scheduleFormSave()
 }
-// 一次性 seed 复用：批次结束后恢复自动随机
-let oneShotSeed = false
+// 复用中状态：批次全部结束后恢复随机
+const seedReuseActive = ref(false)
 function maybeRestoreSeed() {
-  if (oneShotSeed) { oneShotSeed = false; autoRandSeed.value = true }
+  const hasUnfinished = sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)
+  if (!hasUnfinished) seedReuseActive.value = false
 }
 
 // ===== 大图预览 =====

@@ -1,5 +1,5 @@
 // 创建批量任务（每张图 × 批次，逐单自动连发）
-import { createBatch, runBatchLoop, getBatchInfo } from '../utils/batch'
+import { createBatch, enqueueBatchRun, getBatchInfo } from '../utils/batch'
 import { comfyBase, readWorkflowFile } from '../utils/comfy'
 
 export default defineEventHandler(async (event) => {
@@ -67,11 +67,8 @@ export default defineEventHandler(async (event) => {
     clientId
   })
 
-  // 异步启动 runloop（不 await，返回后前端轮询/SSE 获取进度）
-  runBatchLoop(job).catch((e) => {
-    console.error('batch runloop error', job.id, e)
-    job.finishedAt = Date.now()
-  })
+  // 异步启动 runloop（全局串行链：后提交的批次排队，依次执行）
+  enqueueBatchRun(job)
 
   return getBatchInfo(job.id)
 })

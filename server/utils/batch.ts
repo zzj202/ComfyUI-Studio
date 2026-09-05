@@ -29,6 +29,7 @@ export interface BatchJob {
   clientId: string
   items: BatchItem[]
   startedAt: number
+  loopStarted?: boolean
   finishedAt?: number
   cancelled?: boolean
 }
@@ -49,6 +50,7 @@ export function getBatchInfo(id: string) {
     images: j.images,
     batch: j.batch,
     startedAt: j.startedAt,
+    loopStarted: !!j.loopStarted,
     finishedAt: j.finishedAt,
     cancelled: j.cancelled,
     items: j.items.map((it) => ({
@@ -238,6 +240,21 @@ export async function runItem(job: BatchJob, item: BatchItem) {
       }
       await new Promise((r) => setTimeout(r, POLL_MS))
     }
+}
+
+/** 批次依次执行：后提交的批次排队，等前面的批次全部跑完再开始（ComfyUI 队列语义） */
+let runChain: Promise<void> = Promise.resolve()
+export function enqueueBatchRun(job: BatchJob) {
+  runChain = runChain
+    .then(() => {
+      if (job.cancelled) { job.finishedAt = Date.now(); return }
+      job.loopStarted = true
+      return runBatchLoop(job)
+    })
+    .catch((e) => {
+      console.error('batch runloop error', job.id, e)
+      if (!job.finishedAt) job.finishedAt = Date.now()
+    })
 }
 
 /** runloop：逐个拿 pending/running item，直到全部非 pending 或取消 */
