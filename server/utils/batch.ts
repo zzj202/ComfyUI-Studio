@@ -298,8 +298,17 @@ async function pollUntilDone(job: BatchJob, item: BatchItem) {
       if (entry?.status?.status_str === 'error') {
         item.status = 'error'
         item.durationMs = Date.now() - start
+        // 提取可读错误：优先 exception_message，避免 [object Object]
+        const msgs: any[] = entry?.status?.messages || []
         item.error =
-          entry?.status?.messages?.map((m: any) => (Array.isArray(m) ? m[1] : m)).join('; ') || '执行失败'
+          msgs
+            .map((m: any) => {
+              const body = Array.isArray(m) ? m[1] : m
+              if (typeof body === 'string') return body
+              return body?.exception_message || body?.exception_type || JSON.stringify(body)?.slice(0, 200) || '执行失败'
+            })
+            .filter(Boolean)
+            .join('; ') || '执行失败'
         persistJob(job)
         return
       }
@@ -393,10 +402,16 @@ function restorePersistedJobs() {
     if (!existsSync(PERSIST_DIR)) return
     const files = readdirSync(PERSIST_DIR).filter((f) => f.endsWith('.json'))
     const restored: BatchJob[] = []
+    const DAY_MS = 24 * 60 * 60 * 1000
     for (const f of files) {
       try {
         const j = JSON.parse(readFileSync(join(PERSIST_DIR, f), 'utf-8')) as BatchJob
         if (!j?.id || !Array.isArray(j.items)) continue
+        // 已结束超过 24h 的批次文件直接清掉，防无限累积
+        if ((j.finishedAt || j.startedAt) < Date.now() - DAY_MS) {
+          removePersisted(j.id)
+          continue
+        }
         // 恢复时：running 但没提交成功过（无 promptId）→ 回退 pending 重跑
         for (const it of j.items) {
           if (it.status === 'running' && !it.promptId) it.status = 'pending'

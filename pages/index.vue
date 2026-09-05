@@ -587,7 +587,6 @@ async function pollAll() {
   if (!unfinished.length) { stopPolling(); return }
   pollBusy = true
   let newlyDone = false
-  let anyFinished = false
   try {
     for (const b of unfinished) {
       try {
@@ -599,14 +598,15 @@ async function pollAll() {
         for (const id of collectDoneIds(b)) {
           if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
         }
-        if (info.finishedAt) { anyFinished = true; maybeRestoreSeed() }
+        if (info.finishedAt) maybeRestoreSeed()
       } catch { /* 网络抖动忽略 */ }
     }
   } finally {
     pollBusy = false
   }
   if (newlyDone) refreshHistory()
-  if (anyFinished) stopPolling()
+  // 仅当全部批次都结束时才停轮询；还有未完成的必须继续盯（否则后面的批次永远卡在排队中）
+  if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) stopPolling()
 }
 function stopPolling() {
   if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
