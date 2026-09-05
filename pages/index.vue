@@ -210,8 +210,8 @@
           <div v-for="item in history" :key="item.promptId" class="result-item">
             <div class="result-media">
               <template v-if="item.outputs.length">
-                <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0], true)" loading="lazy" @click="openViewer(mediaUrl(item.outputs[0], true), item.outputs[0].filename, 'image')" />
-                <video v-else-if="item.outputs[0].kind === 'video'" :src="mediaUrl(item.outputs[0], true)" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(mediaUrl(item.outputs[0], true), item.outputs[0].filename, 'video')" />
+                <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0])" loading="lazy" @click="openViewer(mediaUrl(item.outputs[0]), item.outputs[0].filename, 'image')" />
+                <video v-else-if="item.outputs[0].kind === 'video'" :src="mediaUrl(item.outputs[0])" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(mediaUrl(item.outputs[0]), item.outputs[0].filename, 'video')" />
               </template>
             </div>
             <div v-if="promptText(item)" class="result-prompt" :title="promptText(item)">{{ promptText(item) }}</div>
@@ -219,7 +219,7 @@
               <button class="btn mini" title="读取该资产提交时的完整工作流：自动匹配工作流，还原所有参数（提示词/seed/分辨率/时长/LoRA）与参考图" @click="applyAssetParams(item)">♻️ 复用全部参数</button>
               <span v-if="fmtDur(item.durationMs)" class="time-chip" title="生成耗时">⏱ {{ fmtDur(item.durationMs) }}</span>
               <span class="fn" :title="item.promptId">{{ item.outputs.length }} 个 · {{ item.promptId.slice(0, 8) }}…</span>
-              <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0], true)" :download="item.outputs[0].filename">下载</a>
+              <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0])" :download="item.outputs[0].filename">下载</a>
             </div>
           </div>
         </div>
@@ -580,23 +580,30 @@ function collectDoneIds(b: any): Set<string> {
   for (const it of (b?.items || [])) if (it.status === 'done' && it.promptId) s.add(it.promptId)
   return s
 }
+let pollBusy = false // 上一轮未返回时跳过本轮，避免请求堆积（ComfyUI 忙时 1.5s 间隔可能不够）
 async function pollAll() {
+  if (pollBusy) return
   const unfinished = sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled)
   if (!unfinished.length) { stopPolling(); return }
+  pollBusy = true
   let newlyDone = false
   let anyFinished = false
-  for (const b of unfinished) {
-    try {
-      const info: any = await $fetch(`/api/batch/${b.id}`)
-      if (info.exists === false) { b.finishedAt = b.finishedAt || Date.now(); continue }
-      const before = collectDoneIds(b)
-      Object.assign(b, info)
-      // 新完成的单 → 立即刷新最近产出（不等整批结束）
-      for (const id of collectDoneIds(b)) {
-        if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
-      }
-      if (info.finishedAt) { anyFinished = true; maybeRestoreSeed() }
-    } catch { /* 网络抖动忽略 */ }
+  try {
+    for (const b of unfinished) {
+      try {
+        const info: any = await $fetch(`/api/batch/${b.id}`)
+        if (info.exists === false) { b.finishedAt = b.finishedAt || Date.now(); continue }
+        const before = collectDoneIds(b)
+        Object.assign(b, info)
+        // 新完成的单 → 立即刷新最近产出（不等整批结束）
+        for (const id of collectDoneIds(b)) {
+          if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
+        }
+        if (info.finishedAt) { anyFinished = true; maybeRestoreSeed() }
+      } catch { /* 网络抖动忽略 */ }
+    }
+  } finally {
+    pollBusy = false
   }
   if (newlyDone) refreshHistory()
   if (anyFinished) stopPolling()
@@ -638,7 +645,7 @@ const batchDoneOutputs = computed<Out[]>(()=>{
   const list:Out[]=[]
   for (const item of (activeBatch.value?.items||[])) {
     if (item.status==='done') for (const o of item.outputs||[]) {
-      list.push({ ...o, src: mediaUrl(o, true), durationMs: item.durationMs })
+      list.push({ ...o, src: mediaUrl(o), durationMs: item.durationMs })
     }
   }
   return list
@@ -654,14 +661,38 @@ function readJSON<T>(key: string): T | null {
 function saveCleared() {
   try { localStorage.setItem(CLEARED_KEY, JSON.stringify([...clearedIds].slice(-500))) } catch {}
 }
-async function refreshHistory() {
+// 历史刷新：脏标记 + 去抖合并 + 兜底重试。
+// ComfyUI 忙时 /history 可能超时——失败不清脏标记，4s 兜底定时器会一直重试直到成功，绝不丢更新
+let histDirty = false
+let histInFlight = false
+let histDebounce: any = null
+function refreshHistory(force = false) {
+  histDirty = true
+  if (force) {
+    if (histDebounce) { clearTimeout(histDebounce); histDebounce = null }
+    flushHistory()
+    return
+  }
+  if (histDebounce || histInFlight) return // 去抖：连续多次触发合并为一次拉取
+  histDebounce = setTimeout(flushHistory, 600)
+}
+async function flushHistory() {
+  histDebounce = null
+  if (histInFlight || !histDirty) return
+  histInFlight = true
+  histDirty = false
   try {
     // max=100：窗口要足够大，避免新产出把旧产出挤出窗口导致「看起来没更新」
-    const res:any = await $fetch('/api/history?max=100')
-    history.value = (res.items||[]).filter((it:any) => !clearedIds.has(it.promptId))
+    const res: any = await $fetch('/api/history?max=100', { timeout: 12000 })
+    history.value = (res.items || []).filter((it: any) => !clearedIds.has(it.promptId))
+  } catch {
+    histDirty = true // 拉取失败（网络抖动/ComfyUI 忙），保留脏标记等兜底重试
+  } finally {
+    histInFlight = false
   }
-  catch { /* 连接失败静默 */ }
 }
+// 兜底心跳：只要有待刷新就每 4s 重试（含批次全部结束后的终态保障）
+setInterval(() => { if (histDirty) flushHistory() }, 4000)
 function clearHistory() {
   for (const it of history.value) clearedIds.add(it.promptId)
   saveCleared()
@@ -855,6 +886,16 @@ onMounted(() => {
   refreshHistory()
   $fetch('/api/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
   window.addEventListener('keydown', onKeydown)
+  // 后台标签页的定时器会被浏览器节流，切回前台时立即补一次状态+历史刷新
+  document.addEventListener('visibilitychange', onVisibility)
 })
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+function onVisibility() {
+  if (document.hidden) return
+  if (sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) pollAll()
+  refreshHistory(true)
+}
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('visibilitychange', onVisibility)
+})
 </script>
