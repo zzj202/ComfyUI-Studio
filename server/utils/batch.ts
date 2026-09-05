@@ -7,7 +7,8 @@ const AUTO_POLL_INTERVAL = 4000 // runloop 主动轮询已提交 items 的间隔
 
 export interface BatchItem {
   id: string
-  image: string        // 该单使用的参考图文件名
+  image: string        // 该单使用的第一张参考图（兼容展示）
+  images?: string[]    // 多图槽位工作流：该单使用的全部参考图（按槽位顺序）
   seed: number | null
   status: 'pending' | 'running' | 'done' | 'error'
   promptId?: string
@@ -19,7 +20,7 @@ export interface BatchJob {
   id: string
   workflow: string
   baseOverrides: Record<string, Record<string, any>>
-  imageNodeId: string       // LoadImage 节点 id
+  imageNodeIds: string[]    // LoadImage 节点 id（按槽位顺序；单图工作流长度为 1）
   seedNodeId: string | null // seed 字段所在节点 id
   seedKey: string | null
   images: string[]
@@ -53,12 +54,14 @@ export function getBatchInfo(id: string) {
     items: j.items.map((it) => ({
       id: it.id,
       image: it.image,
+      images: it.images || [it.image],
       seed: it.seed,
       status: it.status,
       promptId: it.promptId,
       error: it.error,
       outputCount: it.outputs.length
-    }))
+    })),
+    slotCount: j.imageNodeIds.length
   }
 }
 
@@ -76,12 +79,25 @@ export function disposeBatch(id: string) {
 }
 
 /** 预生成 items 顺序 = images × batch（每张图跑 batch 单，每单一个独立 seed） */
+/** 预生成 items 顺序：
+ *  单图槽位工作流 = images × batch（每张图跑 batch 单，每单一个独立 seed）
+ *  多图槽位工作流 = 每 slots 张图为一组，每组跑 batch 单（如视频工作流 Picture1/2/3 一组） */
 function planItems(job: BatchJob) {
-  for (const img of job.images) {
+  const slots = Math.max(1, job.imageNodeIds?.length || 1)
+  const groups: string[][] = []
+  if (slots === 1) {
+    for (const img of job.images) groups.push([img])
+  } else {
+    for (let i = 0; i + slots <= job.images.length; i += slots) {
+      groups.push(job.images.slice(i, i + slots))
+    }
+  }
+  for (const g of groups) {
     for (let n = 0; n < job.batch; n++) {
       job.items.push({
         id: genId('t'),
-        image: img,
+        image: g[0],
+        images: g,
         seed: job.randSeed ? Math.floor(Math.random() * 1e15) : null,
         status: 'pending',
         outputs: []
@@ -93,7 +109,7 @@ function planItems(job: BatchJob) {
 export interface CreateBatchInput {
   workflow: string
   baseOverrides: Record<string, Record<string, any>>
-  imageNodeId: string
+  imageNodeIds: string[]
   images: string[]
   batch: number
   randSeed: boolean
@@ -109,7 +125,7 @@ export function createBatch(input: CreateBatchInput) {
     id: genId('batch'),
     workflow: input.workflow,
     baseOverrides: structuredClone(input.baseOverrides),
-    imageNodeId: input.imageNodeId,
+    imageNodeIds: input.imageNodeIds,
     seedNodeId: input.seedNodeId,
     seedKey: input.seedKey,
     images: input.images,
@@ -137,8 +153,11 @@ function buildGraph(job: BatchJob, item: BatchItem): { ok: true; graph: any } | 
     if (!graph[nid]) continue
     graph[nid].inputs = { ...graph[nid].inputs, ...fields }
   }
-  // 覆盖 image
-  if (graph[job.imageNodeId]) graph[job.imageNodeId].inputs.image = item.image
+  // 覆盖 image（多槽位按组填充：Picture 1/2/3 依次对应一组参考图，缺位槽保持原样）
+  const imgs = item.images || [item.image]
+  job.imageNodeIds.forEach((nid, i) => {
+    if (imgs[i] && graph[nid]) graph[nid].inputs.image = imgs[i]
+  })
   // 覆盖 seed
   if (item.seed !== null && job.seedNodeId && job.seedKey && graph[job.seedNodeId]) {
     graph[job.seedNodeId].inputs[job.seedKey] = item.seed

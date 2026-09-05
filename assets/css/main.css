@@ -236,6 +236,16 @@ textarea { resize: vertical; min-height: 64px; }
 .node-group.adv { border-style: dashed; }
 .node-group.adv > .group-title { color: var(--muted); cursor: pointer; }
 
+/* 常用参数（常驻） */
+.node-group.common { border-color: #bbe7c9; }
+.node-group.common > .group-title { color: var(--green); cursor: default; }
+
+/* 提示词分组行：首/尾并排一行，中独占一行 */
+.prompt-row { display: flex; flex-direction: column; }
+.prompt-row.multi { flex-direction: row; gap: 12px; align-items: stretch; }
+.prompt-row.multi > .node-group { flex: 1; min-width: 0; }
+@media (max-width: 700px) { .prompt-row.multi { flex-direction: column; } }
+
 /* 图片队列 */
 .dropzone {
   border: 2px dashed var(--border);

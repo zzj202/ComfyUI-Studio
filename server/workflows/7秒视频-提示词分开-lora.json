@@ -247,6 +247,14 @@
       "ref_images.ref_image_0": [
         "137",
         0
+      ],
+      "ref_images.ref_image_1": [
+        "157",
+        0
+      ],
+      "ref_images.ref_image_2": [
+        "158",
+        0
       ]
     },
     "class_type": "MiniMaxH3ReferenceToVideo",
@@ -349,6 +357,24 @@
     "class_type": "ShowText|pysssss",
     "_meta": {
       "title": "展示文本"
+    }
+  },
+  "157": {
+    "inputs": {
+      "image": "1 (7).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Picture 2"
+    }
+  },
+  "158": {
+    "inputs": {
+      "image": "1 (7).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Picture 3"
     }
   },
   "154": {

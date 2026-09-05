@@ -17,19 +17,21 @@ export default defineEventHandler(async (event) => {
   if (!images.length) throw createError({ statusCode: 400, message: '至少需要一张参考图' })
   if (batch > 50) throw createError({ statusCode: 400, message: '批次最多 50' })
 
-  // 定位 image / seed 节点
+  // 定位 image / seed 节点（多 LoadImage 工作流：按节点标题自然排序作为槽位顺序）
   const graphRes = readWorkflowFile(workflow)
   if (!graphRes.ok) throw createError({ statusCode: 400, message: graphRes.error })
   const graph = graphRes.graph as any
 
-  let imageNodeId: string | null = null
+  const imageNodes: { id: string; title: string }[] = []
   let seedNodeId: string | null = null
   let seedKey: string | null = null
 
   for (const [nid, node] of Object.entries<any>(graph || {})) {
     const ct = String(node?.class_type || '')
     const inputs = node?.inputs || {}
-    if (ct === 'LoadImage' && !imageNodeId) imageNodeId = nid
+    if (ct === 'LoadImage') {
+      imageNodes.push({ id: nid, title: String(node?._meta?.title || nid) })
+    }
     if (!seedNodeId) {
       for (const [k, v] of Object.entries<any>(inputs)) {
         if (typeof v === 'number' && /seed/i.test(k)) {
@@ -40,12 +42,22 @@ export default defineEventHandler(async (event) => {
       }
     }
   }
-  if (!imageNodeId) throw createError({ statusCode: 400, message: '工作流里没有 LoadImage 输入节点' })
+  if (!imageNodes.length) throw createError({ statusCode: 400, message: '工作流里没有 LoadImage 输入节点' })
+  imageNodes.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN', { numeric: true }))
+  const imageNodeIds = imageNodes.map((n) => n.id)
+
+  // 多槽位：图片按槽位数分组，凑不满一组的尾巴不参与
+  if (imageNodeIds.length > 1 && images.length < imageNodeIds.length) {
+    throw createError({
+      statusCode: 400,
+      message: `该工作流每单需要 ${imageNodeIds.length} 张参考图（${imageNodes.map((n) => n.title).join(' / ')}），当前只有 ${images.length} 张`
+    })
+  }
 
   const job = createBatch({
     workflow,
     baseOverrides,
-    imageNodeId,
+    imageNodeIds,
     images,
     batch,
     randSeed,

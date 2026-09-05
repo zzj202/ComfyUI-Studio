@@ -13,3 +13,10 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+
+.playwright-cli/
+*.png
+!docs/*.png
+final1.txt
+r1.txt
+v1.yaml

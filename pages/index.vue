@@ -42,7 +42,7 @@
             @drop.prevent="onDrop"
             @click="$refs.fileInput && $refs.fileInput.click()"
           >
-            <div class="dz-hint">📤 点击 或 拖拽图片到此处（可多选）</div>
+            <div class="dz-hint">📤 点击 或 拖拽图片到此处（可多选）<template v-if="imageSlots > 1"> · 本工作流每单按 {{ imageSlots }} 张一组使用（Picture 1 → 2 → 3 顺序）</template></div>
             <input
               ref="fileInput"
               type="file"
@@ -76,14 +76,26 @@
         </template>
       </div>
 
-      <!-- ② 提示词 & 高级参数 & 生成设置 -->
+      <!-- ② 提示词 & 常用参数 & 高级参数 & 生成设置 -->
       <div class="card">
-        <div v-for="group in promptGroups" :key="group.nodeId" class="node-group">
-          <div class="group-title row">
-            <span>✏️ {{ group.title }}</span>
-            <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
+        <template v-for="(row, ri) in promptRows" :key="'pr'+ri">
+          <div :class="['prompt-row', { multi: row.length > 1 }]">
+            <div v-for="group in row" :key="group.nodeId" class="node-group">
+              <div class="group-title row">
+                <span>✏️ {{ group.title }}</span>
+                <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
+              </div>
+              <div v-for="f in group.fields" :key="f.uid" class="field">
+                <FieldControl :field="f" v-model="form[f.uid]" />
+              </div>
+            </div>
           </div>
-          <div v-for="f in group.fields" :key="f.uid" class="field">
+        </template>
+
+        <!-- 常用参数（常驻展示） -->
+        <div v-if="commonFields.length" class="node-group common">
+          <div class="group-title">🎛 常用参数</div>
+          <div v-for="f in commonFields" :key="f.uid" class="field">
             <FieldControl :field="f" v-model="form[f.uid]" />
           </div>
         </div>
@@ -262,16 +274,26 @@ function scheduleFormSave() {
 let restoring = false
 
 // ===== 工作流 =====
+const WF_KEY = 'selectedWorkflow:v1'
 async function loadWorkflows() {
   try {
     const res: any = await $fetch('/api/workflows')
     workflows.value = res.workflows || []
-    if (!selectedFile.value && workflows.value.length) await selectWorkflow(workflows.value[0])
+    if (selectedFile.value) return
+    // 恢复上次选择的工作流；不存在（被删/改名）时回落到第一个
+    let target: any = null
+    try {
+      const saved = localStorage.getItem(WF_KEY)
+      if (saved) target = workflows.value.find(w => w.file === saved && !w.broken) || null
+    } catch {}
+    if (!target && workflows.value.length) target = workflows.value[0]
+    if (target) await selectWorkflow(target)
   } catch { workflows.value = [] }
 }
 async function selectWorkflow(wf: any) {
   if (wf.broken) return
   selectedFile.value = wf.file
+  try { localStorage.setItem(WF_KEY, wf.file) } catch {}
   busy.value = false
   advOpen.value = false
   if (pollTimer.value) clearInterval(pollTimer.value)
@@ -299,22 +321,23 @@ function extractFields(g: any): FieldDef[] {
     for (const [name, value] of Object.entries<any>(inputs)) {
       if (Array.isArray(value) || value === null) continue
       const uid = `${nodeId}.${name}`
-      const label = title === name ? name : `${title} · ${name}`
       let kind: FieldDef['kind'] = 'text'
       let options: string[] | undefined
       let step: number | undefined
       let isSeed = false
       const ct = String(node?.class_type || '')
       if (ct === 'LoadImage') continue // 图片走队列
+      if (/ShowText/i.test(ct)) continue // 展示类节点（如 ShowText），不是输入
       if (typeof value === 'number') { kind = 'number'; isSeed = /seed/i.test(name); if (!isSeed) step = Number.isInteger(value) ? 1 : 0.01 }
       else if (typeof value === 'boolean') kind = 'bool'
       else if (typeof value === 'string') {
         if (name === 'sampler_name') { kind='select'; options=SAMPLERS }
         else if (name === 'scheduler') { kind='select'; options=SCHEDULERS }
-        else if (/^(text|prompt|positive_prompt|negative_prompt|caption|positive_text|negative_text|text_0)$/i.test(name)) kind='textarea'
-        else if (value.includes('\n')) kind='textarea' // 多行文本（分段提示词等）用大输入框
+        else if (value.includes('\n') || (value.length > 60 && /[\u4e00-\u9fff]/.test(value))) kind='textarea' // 长中文文本（分段提示词等）用大输入框
+        else if (/^(prompt|positive_prompt|negative_prompt|caption|positive_text|negative_text)$/i.test(name)) kind='textarea'
         else kind='text'
       }
+      const label = title === name || name === 'value' ? title : `${title} · ${name}`
       out.push({ uid, nodeId, name, label, kind, options, step, isSeed, original: value })
     }
   }
@@ -330,7 +353,24 @@ const promptGroups = computed(() => {
   }
   return [...m.values()]
 })
-const advancedFields = computed(() => fields.value.filter(f=>f.kind!=='textarea'))
+// 提示词分组布局：首/尾并排一行（上），中独占一行（下）；其余工作流保持顺序单列
+const promptRows = computed(() => {
+  const gs = promptGroups.value
+  const byTitle = (t: string) => gs.find(g => g.title === t)
+  const head = byTitle('首'), mid = byTitle('中'), tail = byTitle('尾')
+  if (head && mid && tail) {
+    const rest = gs.filter(g => g !== head && g !== mid && g !== tail)
+    return [[head, tail], [mid], ...rest.map(g => [g])]
+  }
+  return gs.map(g => [g])
+})
+// 常用参数：需要常驻展示（不折叠进高级参数）的节点标题
+const COMMON_TITLES = ['Resolution Selector (Size)', 'Float (Duration)']
+function isCommonField(f: FieldDef): boolean {
+  return COMMON_TITLES.includes(String(graph.value?.[f.nodeId]?._meta?.title || ''))
+}
+const commonFields = computed(() => fields.value.filter(f=>f.kind!=='textarea' && isCommonField(f)))
+const advancedFields = computed(() => fields.value.filter(f=>f.kind!=='textarea' && !isCommonField(f)))
 // 提供一个入口让"固定seed"能找到对应 seed 输入
 const seedField = computed(() => fields.value.find(f=>f.isSeed))
 
@@ -477,13 +517,14 @@ async function pollNow(id:string){
   try { const info:any=await $fetch(`/api/batch/${id}`); if(info.exists!==false){ activeBatch.value=info; onBatchUpdate(info); if(isFinished(info)) stopPolling() } }catch{}
 }
 function onBatchUpdate(info:any) {
-  if (info.finishedAt) busy.value=false
+  if (info.finishedAt) { busy.value=false; maybeRestoreSeed() }
   // 收集本批 done outputs（简单：靠前端刷新 history）
 }
 function stopPolling(){
   if (pollTimer.value){ clearInterval(pollTimer.value); pollTimer.value=null }
   if (esBatch){ esBatch.close(); esBatch=null }
   busy.value=false
+  maybeRestoreSeed()
   refreshHistory()
 }
 function isFinished(info:any){
@@ -576,13 +617,20 @@ function applyPrompt(item: any) {
     if (firstTextarea && firstText) { form[firstTextarea.uid] = firstText; n++ }
   }
   // seed：填入当前工作流的 seed 字段，并切到固定 seed 模式（否则随机开关会覆盖它）
+  // 一次性复用：本批跑完自动切回「每单自动随机」
   if (seedVal != null && seedField.value) {
     form[seedField.value.uid] = seedVal
     autoRandSeed.value = false
     fixedSeedVal.value = seedVal
+    oneShotSeed = true
     n++
   }
   if (n) scheduleFormSave()
+}
+// 一次性 seed 复用：批次结束后恢复自动随机
+let oneShotSeed = false
+function maybeRestoreSeed() {
+  if (oneShotSeed) { oneShotSeed = false; autoRandSeed.value = true }
 }
 
 // ===== 大图预览 =====
@@ -595,14 +643,27 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // ===== 生成计划提示 =====
+// 图片槽位数：工作流里 LoadImage 节点数（多槽位=每单消耗一组图）
+const imageSlots = computed(() => Object.values<any>(graph.value || {}).filter(n => n?.class_type === 'LoadImage').length)
 const validImageCount = computed(() => images.value.filter(i => i.serverName).length)
-const canSubmit = computed(() => validImageCount.value > 0 && !!graph.value)
+const canSubmit = computed(() => {
+  if (!graph.value) return false
+  const n = validImageCount.value
+  return imageSlots.value > 1 ? n >= imageSlots.value : n > 0
+})
 const planText = computed(() => {
   if (!graph.value) return '请先在左侧选择工作流'
+  const slots = imageSlots.value
   const n = validImageCount.value
   if (!n) return '请先上传参考图'
-  const total = n * (batchCount.value || 1)
-  return `将生成 ${total} 张（${n} 张参考图 × ${batchCount.value} 批）`
+  const batch = batchCount.value || 1
+  if (slots > 1) {
+    if (n < slots) return `该工作流每单需要 ${slots} 张参考图（一组），还差 ${slots - n} 张`
+    const groups = Math.floor(n / slots)
+    const leftover = n % slots
+    return `将生成 ${groups * batch} 个（${groups} 组 × ${batch} 批，每组 ${slots} 张图）${leftover ? `，多出的 ${leftover} 张不参与` : ''}`
+  }
+  return `将生成 ${n * batch} 个（${n} 张参考图 × ${batch} 批）`
 })
 function mediaUrl(r:any, bust=false) {
   const q = new URLSearchParams({ filename:r.filename, subfolder:r.subfolder||'', type:r.type||'output' })
