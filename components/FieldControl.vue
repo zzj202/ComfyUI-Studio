@@ -1,6 +1,6 @@
 <template>
   <div class="field">
-    <label>
+    <label v-if="!hideLabel">
       <span class="fname">{{ field.label }}</span>
       <span v-if="field.kind === 'textarea'" class="muted">（提示词）</span>
     </label>
@@ -53,7 +53,7 @@ interface FieldDef {
   kind: 'textarea' | 'number' | 'select' | 'bool' | 'text' | 'image'
   options?: string[]; step?: number; isSeed?: boolean; original: any
 }
-const props = defineProps<{ field: FieldDef; modelValue: any }>()
+const props = defineProps<{ field: FieldDef; modelValue: any; hideLabel?: boolean }>()
 defineEmits<{ (e: 'update:modelValue', v: any): void }>()
 
 function num(e: Event) {

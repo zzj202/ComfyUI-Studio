@@ -42,7 +42,11 @@
             @drop.prevent="onDrop"
             @click="$refs.fileInput && $refs.fileInput.click()"
           >
-            <div class="dz-hint">📤 点击 或 拖拽图片到此处（可多选）<template v-if="imageSlots > 1"> · 本工作流每单按 {{ imageSlots }} 张一组使用（Picture 1 → 2 → 3 顺序）</template></div>
+            <div class="dz-hint">
+              📤 点击 或 拖拽图片到此处（可多选）
+              <template v-if="isVideoWf"> · 本工作流每单按 {{ imageSlots }} 张一组使用（Picture 1 → 2 → 3 顺序）</template>
+              <template v-else> · 多张图将<b>轮流</b>与当前提示词组合，逐张 × 批次连发</template>
+            </div>
             <input
               ref="fileInput"
               type="file"
@@ -86,7 +90,7 @@
                 <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
               </div>
               <div v-for="f in group.fields" :key="f.uid" class="field">
-                <FieldControl :field="f" v-model="form[f.uid]" />
+                <FieldControl :field="f" v-model="form[f.uid]" :hide-label="group.fields.length === 1 && group.fields[0].label === group.title" />
               </div>
             </div>
           </div>
@@ -138,20 +142,30 @@
 
           <div class="gen-actions">
             <span class="plan" :class="{ warn: !canSubmit }">{{ planText }}</span>
-            <button class="btn primary" :disabled="busy || !canSubmit" @click="submitBatch">▶ 开始批量生成</button>
-            <button v-if="activeBatch && !activeBatch.finishedAt" class="btn small danger" @click="stopBatch">⏹ 停止</button>
+            <button class="btn primary" :disabled="submitting || !canSubmit" @click="submitBatch">▶ 开始批量生成</button>
           </div>
         </div>
 
-        <div v-if="progress.status" style="margin-top:16px">
-          <div class="progress-wrap">
-            <div class="progress-track">
-              <div class="progress-bar" :style="{ width: batchPercent + '%' }"></div>
+        <!-- 批次列表：可连续提交多批，互不阻塞 -->
+        <div v-if="sessionBatches.length" class="batch-list">
+          <div class="batch-list-title">📋 本会话批次（{{ runningCount }} 进行中 · 点击行查看结果）</div>
+          <div
+            v-for="b in sessionBatches"
+            :key="b.id"
+            class="batch-row"
+            :class="{ sel: b.id === selectedBatchId, done: !!b.finishedAt && !b.cancelled, cancelled: b.cancelled }"
+            @click="selectedBatchId = b.id"
+          >
+            <div class="batch-row-head">
+              <span class="batch-wf">{{ shortWf(b.workflow) }}</span>
+              <span class="batch-info">{{ batchTextOf(b) }}</span>
+              <button v-if="!b.finishedAt && !b.cancelled" class="btn mini danger" @click.stop="stopBatch(b.id)">⏹ 停止</button>
+              <span v-else class="batch-tag" :class="{ ok: !!b.finishedAt && !b.cancelled }">{{ b.cancelled ? '已停止' : '完成' }}</span>
             </div>
-            <div class="progress-text">{{ batchText }}</div>
+            <div class="progress-track"><div class="progress-bar" :style="{ width: percentOf(b) + '%' }"></div></div>
           </div>
-          <div class="status-line" :class="{ error: progress.status === 'error' }">{{ progressMessage }}</div>
         </div>
+        <div v-if="progress.status === 'error'" class="status-line error" style="margin-top:8px">{{ progress.message }}</div>
       </div>
 
       <!-- ③ 本批结果 -->
@@ -238,9 +252,8 @@ const batchCount = ref(2)
 const autoRandSeed = ref(true)
 const fixedSeedVal = ref(12345)
 
-const activeBatch = ref<any>(null) // 当前/最近一次批量任务信息
-const busy = ref(false)
-const batchOutputs = ref<Out[]>([]) // 本批全部 done 输出
+// 视频工作流（专属 UI 分支）：多图槽位、首/中/尾分段提示词
+const isVideoWf = computed(() => /7秒视频/.test(selectedFile.value))
 const history = ref<any[]>([])
 
 const SAMPLERS = ['euler','euler_ancestral','heun','dpm_2','dpm_2_ancestral','lms','dpm_fast','dpm_adaptive','dpmpp_2s_ancestral','dpmpp_sde','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','ddim','uni_pc','uni_pc_bh2','lcm','ddpm']
@@ -294,11 +307,8 @@ async function selectWorkflow(wf: any) {
   if (wf.broken) return
   selectedFile.value = wf.file
   try { localStorage.setItem(WF_KEY, wf.file) } catch {}
-  busy.value = false
   advOpen.value = false
-  if (pollTimer.value) clearInterval(pollTimer.value)
-  activeBatch.value = null
-  batchOutputs.value = []
+  // 不清空 sessionBatches / 不停轮询：其他工作流的批次继续在批次列表里跑
   restoring = true
   images.value = []
   try { graph.value = await $fetch(`/api/workflows/${encodeURIComponent(wf.file)}`); initForm(); restoreImages() }
@@ -328,16 +338,19 @@ function extractFields(g: any): FieldDef[] {
       const ct = String(node?.class_type || '')
       if (ct === 'LoadImage') continue // 图片走队列
       if (/ShowText/i.test(ct)) continue // 展示类节点（如 ShowText），不是输入
+      // 主提示词输入名：label 直接用节点标题（如 CLIP Text Encode (Positive Prompt)）
+      const isMainTextName = /^(text|prompt|value|text_0)$/i.test(name)
+      const forceText = /^CLIPTextEncode/.test(ct) // CLIP 文本编码节点恒为提示词框（即使内容很短）
       if (typeof value === 'number') { kind = 'number'; isSeed = /seed/i.test(name); if (!isSeed) step = Number.isInteger(value) ? 1 : 0.01 }
       else if (typeof value === 'boolean') kind = 'bool'
       else if (typeof value === 'string') {
         if (name === 'sampler_name') { kind='select'; options=SAMPLERS }
         else if (name === 'scheduler') { kind='select'; options=SCHEDULERS }
-        else if (value.includes('\n') || (value.length > 60 && /[\u4e00-\u9fff]/.test(value))) kind='textarea' // 长中文文本（分段提示词等）用大输入框
+        else if (forceText || value.includes('\n') || (value.length > 60 && /[\u4e00-\u9fff]/.test(value))) kind='textarea' // 提示词用大输入框
         else if (/^(prompt|positive_prompt|negative_prompt|caption|positive_text|negative_text)$/i.test(name)) kind='textarea'
         else kind='text'
       }
-      const label = title === name || name === 'value' ? title : `${title} · ${name}`
+      const label = title === name || isMainTextName ? title : `${title} · ${name}`
       out.push({ uid, nodeId, name, label, kind, options, step, isSeed, original: value })
     }
   }
@@ -452,7 +465,12 @@ function clearPromptGroup(group: { fields: FieldDef[] }) {
   scheduleFormSave()
 }
 
-// ===== 批量生成 =====
+// ===== 批量生成（支持连续提交多批，互不阻塞）=====
+const submitting = ref(false) // 仅在提交请求期间短暂锁定
+const sessionBatches = ref<any[]>([]) // 本会话所有批次（最新在前）
+const selectedBatchId = ref('') // 当前行选中的批次（用于「本批结果」区）
+const runningCount = computed(() => sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled).length)
+
 function buildBaseOverrides() {
   const ov: Record<string,Record<string,any>> = {}
   for (const f of fields.value) {
@@ -468,13 +486,9 @@ function buildBaseOverrides() {
 async function submitBatch() {
   const valid = images.value.filter(i=>i.serverName)
   if (!valid.length) { alert('请先上传参考图'); return }
-  if (!graph.value) return
+  if (!graph.value || submitting.value) return
 
-  const seedOv = seedField.value ? seedField.value : null
-
-  busy.value = true
-  batchOutputs.value = []
-  progress.status = 'queued'
+  submitting.value = true
   try {
     const res: any = await $fetch('/api/batch', {
       method:'POST',
@@ -485,72 +499,69 @@ async function submitBatch() {
         batch: batchCount.value||1,
         randSeed: autoRandSeed.value,
         fixedSeed: autoRandSeed.value ? null : fixedSeedVal.value,
-        baseOverrides: buildBaseOverrides(),
-        // 前端已知 seed 节点：让后端再找一遍其实更稳
+        baseOverrides: buildBaseOverrides()
       }
     })
-    activeBatch.value = res
-    startPolling(res.id)
+    progress.status = ''
+    sessionBatches.value.unshift(res)
+    selectedBatchId.value = res.id
+    ensurePolling()
   } catch(e:any){
-    busy.value=false
     progress.status='error'
     progress.message = e?.data?.message || e?.data?.error?.message || e?.message || '批量启动失败'
+  } finally {
+    submitting.value = false // 立即解锁，可继续提交下一批
   }
 }
 
-let esBatch: any = null
-function startPolling(batchId: string) {
-  // 关闭旧 SSE
-  if (esBatch) { esBatch.close(); esBatch=null }
-  pollTimer.value = setInterval(async ()=>{
+// 全局轮询：同时盯住所有未完成批次
+function ensurePolling() {
+  if (pollTimer.value) return
+  pollTimer.value = setInterval(pollAll, 1500)
+}
+async function pollAll() {
+  const unfinished = sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled)
+  if (!unfinished.length) { stopPolling(); return }
+  for (const b of unfinished) {
     try {
-      const info:any = await $fetch(`/api/batch/${batchId}`)
-      if (info.exists===false) { stopPolling(); return }
-      activeBatch.value = info
-      onBatchUpdate(info)
-      if (isFinished(info)) stopPolling()
-    } catch { /* ignore */ }
-  }, 1500)
-  pollNow(batchId)
+      const info: any = await $fetch(`/api/batch/${b.id}`)
+      if (info.exists === false) { b.finishedAt = b.finishedAt || Date.now(); continue }
+      Object.assign(b, info)
+      if (info.finishedAt) { maybeRestoreSeed(); refreshHistory() }
+    } catch { /* 网络抖动忽略 */ }
+  }
 }
-async function pollNow(id:string){
-  try { const info:any=await $fetch(`/api/batch/${id}`); if(info.exists!==false){ activeBatch.value=info; onBatchUpdate(info); if(isFinished(info)) stopPolling() } }catch{}
-}
-function onBatchUpdate(info:any) {
-  if (info.finishedAt) { busy.value=false; maybeRestoreSeed() }
-  // 收集本批 done outputs（简单：靠前端刷新 history）
-}
-function stopPolling(){
-  if (pollTimer.value){ clearInterval(pollTimer.value); pollTimer.value=null }
-  if (esBatch){ esBatch.close(); esBatch=null }
-  busy.value=false
-  maybeRestoreSeed()
+function stopPolling() {
+  if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
   refreshHistory()
 }
-function isFinished(info:any){
-  if (info.cancelled) return true
-  return !!info.finishedAt
-}
-async function stopBatch(){
-  if (!activeBatch.value) return
-  try { await $fetch(`/api/batch/${activeBatch.value.id}`,{method:'DELETE'}) } catch{}
-  stopPolling()
+async function stopBatch(id: string) {
+  try { await $fetch(`/api/batch/${id}`, { method: 'DELETE' }) } catch {}
+  const b = sessionBatches.value.find(x => x.id === id)
+  if (b) b.cancelled = true
   refreshHistory()
 }
 
 // ===== 派生 =====
 const progress = reactive<{status:string; message:string}>({status:'', message:''})
-const doneItems = computed(()=> activeBatch.value?.items?.filter((i:any)=>i.status==='done') || [])
-const totalItems = computed(()=> activeBatch.value?.items?.length || 0)
-const batchPercent = computed(()=> totalItems.value? Math.round(doneItems.value.length/totalItems.value*100) : 0)
-const batchText = computed(()=> {
-  if (!activeBatch.value) return ''
-  const r = activeBatch.value.items||[]
-  const done=r.filter((i:any)=>i.status==='done').length
-  const err=r.filter((i:any)=>i.status==='error').length
-  const run=r.filter((i:any)=>i.status==='running').length
-  return `已完成 ${done}/${r.length}${run?` · ${run} 进行中`:''}${err?` · ${err} 失败`:''}`
-})
+const activeBatch = computed(() => sessionBatches.value.find(b => b.id === selectedBatchId.value) || null)
+// 每行批次的状态文案 / 进度 / 工作流短名
+function shortWf(file: string) {
+  return String(file || '').replace(/\.json$/i, '')
+}
+function batchTextOf(b: any): string {
+  const r = b?.items || []
+  const done = r.filter((i:any)=>i.status==='done').length
+  const err = r.filter((i:any)=>i.status==='error').length
+  const run = r.filter((i:any)=>i.status==='running').length
+  return `${done}/${r.length}${run ? ` · ${run} 进行中` : ''}${err ? ` · ${err} 失败` : ''}`
+}
+function percentOf(b: any): number {
+  const r = b?.items || []
+  if (!r.length) return 0
+  const done = r.filter((i:any)=>i.status==='done').length
+  return Math.round(done / r.length * 100)
+}
 const batchDoneOutputs = computed<Out[]>(()=>{
   const list:Out[]=[]
   for (const item of (activeBatch.value?.items||[])) {
@@ -560,7 +571,6 @@ const batchDoneOutputs = computed<Out[]>(()=>{
   }
   return list
 })
-const progressMessage = computed(()=>progress.message)
 
 // ===== 历史 =====
 // 已清空的历史记录（promptId 集合），刷新后仍保持隐藏；新产出 id 不同不受影响
@@ -671,7 +681,7 @@ function mediaUrl(r:any, bust=false) {
   return `/api/view?${q.toString()}`
 }
 function runningOnWorkflow(file:string){
-  return activeBatch.value && activeBatch.value.workflow===file && !activeBatch.value.finishedAt
+  return sessionBatches.value.some(b => b.workflow === file && !b.finishedAt && !b.cancelled)
 }
 
 // ===== 启动 =====

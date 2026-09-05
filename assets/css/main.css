@@ -182,6 +182,27 @@ textarea { resize: vertical; min-height: 64px; }
 .status-line { margin-top: 10px; color: var(--muted); font-size: 13px; }
 .status-line.error { color: var(--red); }
 
+/* 批次列表（多批并发） */
+.batch-list { margin-top: 16px; border-top: 1px dashed var(--border); padding-top: 12px; }
+.batch-list-title { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+.batch-row {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+  transition: all 0.15s; background: var(--bg);
+}
+.batch-row:hover { border-color: var(--accent); }
+.batch-row.sel { border-color: var(--accent); background: var(--accent-soft); }
+.batch-row.done { opacity: 0.75; }
+.batch-row.cancelled { opacity: 0.5; }
+.batch-row-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.batch-row-head .batch-wf {
+  font-weight: 600; font-size: 13px; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.batch-row-head .batch-info { flex: 1; color: var(--muted); font-size: 12px; }
+.batch-tag { font-size: 12px; color: var(--muted); font-weight: 600; }
+.batch-tag.ok { color: var(--green); }
+
 /* 结果 */
 .grid {
   display: grid;
