@@ -10,6 +10,7 @@ const RECONCILE_FAILS = 10  // 连续轮询失败 N 次后，主动查 /queue �
 // ------- 磁盘持久化（Nitro dev 热重载会清空内存，必须落盘才能恢复） -------
 const PERSIST_DIR = join(process.cwd(), 'data', 'batches')
 function persistJob(job: BatchJob) {
+  if (job.cancelled) return // 已取消的批次不留磁盘文件（停止 = 丢弃）
   try {
     mkdirSync(PERSIST_DIR, { recursive: true })
     writeFileSync(join(PERSIST_DIR, `${job.id}.json`), JSON.stringify(job), 'utf-8')
@@ -103,7 +104,7 @@ export function stopBatch(id: string) {
   const j = jobs.get(id)
   if (j) {
     j.cancelled = true
-    persistJob(j)
+    removePersisted(id) // 停止 = 丢弃，磁盘文件一并清理
   }
 }
 
@@ -381,7 +382,8 @@ export async function runBatchLoop(job: BatchJob) {
   }
   if (!job.items.some((it) => it.status === 'pending' || it.status === 'running') || job.cancelled) {
     job.finishedAt = job.finishedAt || Date.now()
-    persistJob(job)
+    if (job.cancelled) removePersisted(job.id)
+    else persistJob(job)
   }
 }
 
