@@ -25,63 +25,7 @@
         </div>
       </div>
 
-      <!-- ① 参考图队列 -->
-      <div class="card">
-        <h2>
-          🖼 参考图（{{ images.length }}）
-          <button class="btn mini" style="margin-left:auto" title="上传一个生成产物（图片/视频），按文件名反查其提交参数并一键复用全部参数" @click="($refs.assetFileInput as any)?.click()">♻️ 从资产复用</button>
-          <input ref="assetFileInput" type="file" accept="image/*,video/mp4,video/webm" hidden @change="onAssetFile" />
-          <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
-        </h2>
-        <div v-if="!selectedFile" class="empty">↑ 先在上方选择一个工作流</div>
-        <template v-else>
-          <div
-            class="dropzone"
-            :class="{ over: dragging }"
-            @dragover.prevent="dragging = true"
-            @dragleave.prevent="dragging = false"
-            @drop.prevent="onDrop"
-            @click="$refs.fileInput && $refs.fileInput.click()"
-          >
-            <div class="dz-hint">
-              📤 点击 或 拖拽图片到此处（可多选）
-              <template v-if="isVideoWf"> · 本工作流每单最多 {{ imageSlots }} 张一组（Picture 1 → 2 → 3 顺序），上传几张就启用几张</template>
-              <template v-else> · 多张图将<b>轮流</b>与当前提示词组合，逐张 × 批次连发</template>
-            </div>
-            <input
-              ref="fileInput"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              multiple
-              hidden
-              @change="(e) => onPickFiles(e)"
-            />
-          </div>
-
-          <div v-if="images.length" class="img-grid">
-            <div
-              v-for="(img, idx) in images"
-              :key="img.id"
-              class="img-cell"
-              draggable="true"
-              @dragstart="dragIdx = idx"
-              @dragover.prevent
-              @drop="dropAt(idx)"
-              @dblclick="removeImage(idx)"
-            >
-              <div class="img-thumb">
-                <img :src="img.src" alt="参考图" loading="lazy" />
-                <span v-if="uploadingId === img.id" class="img-uploading">上传中…</span>
-                <button class="img-x" title="移除" @click.stop="removeImage(idx)">✕</button>
-                <span v-if="batchIndex.includes(idx)" class="img-idx" :title="slotBadgeTitle(idx)">{{ slotBadge(idx) }}</span>
-              </div>
-              <div class="img-name" :title="img.name">{{ img.name }}</div>
-            </div>
-          </div>
-        </template>
-      </div>
-
-      <!-- ② 常用参数 & 高级参数 & 提示词 & 生成设置 -->
+      <!-- ① 常用参数 & 高级参数 & 参考图 & 提示词 & 生成设置 -->
       <div class="card">
         <!-- 常用参数（常驻展示，一行排列） -->
         <div v-if="commonFields.length" class="node-group common">
@@ -106,7 +50,63 @@
           </template>
         </div>
 
-        <!-- 提示词区（在高级参数下方）：首/尾一行，中独占一行 -->
+        <!-- 参考图队列（在首尾提示词上方，主要编辑区就近取图） -->
+        <div class="card nested">
+          <h2>
+            🖼 参考图（{{ images.length }}）
+            <button class="btn mini" style="margin-left:auto" title="上传一个生成产物（图片/视频），按文件名反查其提交参数并一键复用全部参数" @click="($refs.assetFileInput as any)?.click()">♻️ 从资产复用</button>
+            <input ref="assetFileInput" type="file" accept="image/*,video/mp4,video/webm" hidden @change="onAssetFile" />
+            <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
+          </h2>
+          <div v-if="!selectedFile" class="empty">↑ 先在上方选择一个工作流</div>
+          <template v-else>
+            <div
+              class="dropzone"
+              :class="{ over: dragging }"
+              @dragover.prevent="dragging = true"
+              @dragleave.prevent="dragging = false"
+              @drop.prevent="onDrop"
+              @click="$refs.fileInput && $refs.fileInput.click()"
+            >
+              <div class="dz-hint">
+                📤 点击 或 拖拽图片到此处（可多选）
+                <template v-if="isVideoWf"> · 本工作流每单最多 {{ imageSlots }} 张一组（Picture 1 → 2 → 3 顺序），上传几张就启用几张</template>
+                <template v-else> · 多张图将<b>轮流</b>与当前提示词组合，逐张 × 批次连发</template>
+              </div>
+              <input
+                ref="fileInput"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                hidden
+                @change="(e) => onPickFiles(e)"
+              />
+            </div>
+
+            <div v-if="images.length" class="img-grid">
+              <div
+                v-for="(img, idx) in images"
+                :key="img.id"
+                class="img-cell"
+                draggable="true"
+                @dragstart="dragIdx = idx"
+                @dragover.prevent
+                @drop="dropAt(idx)"
+                @dblclick="removeImage(idx)"
+              >
+                <div class="img-thumb">
+                  <img :src="img.src" alt="参考图" loading="lazy" />
+                  <span v-if="uploadingId === img.id" class="img-uploading">上传中…</span>
+                  <button class="img-x" title="移除" @click.stop="removeImage(idx)">✕</button>
+                  <span v-if="batchIndex.includes(idx)" class="img-idx" :title="slotBadgeTitle(idx)">{{ slotBadge(idx) }}</span>
+                </div>
+                <div class="img-name" :title="img.name">{{ img.name }}</div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 提示词区（首/尾一行，中独占一行加大） -->
         <template v-for="(row, ri) in promptRows" :key="'pr'+ri">
           <div :class="['prompt-row', { multi: row.length > 1 }]">
             <div v-for="group in row" :key="group.nodeId" class="node-group">
@@ -310,6 +310,23 @@ function scheduleFormSave() {
 }
 // 切换工作流/初次加载期间跳过持久化，避免清空覆盖已保存会话
 let restoring = false
+
+// ===== 批次列表持久化：刷新后批次展示不丢；未完成的恢复后继续轮询 =====
+const BATCHES_KEY = 'sessionBatches:v1'
+function saveBatches() {
+  try { localStorage.setItem(BATCHES_KEY, JSON.stringify(sessionBatches.value.slice(0, 30))) } catch { /* 超出配额忽略 */ }
+}
+function loadPersistedBatches() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(BATCHES_KEY) || '[]')
+    if (!Array.isArray(arr) || !arr.length) return
+    sessionBatches.value = arr
+    // 已完成的单记入 seenDoneIds，恢复时不算「新完成」
+    for (const b of arr) for (const id of collectDoneIds(b)) seenDoneIds.add(id)
+    // 有未完成的批次 → 恢复轮询（服务端链条独立运行，会继续推进）
+    if (arr.some((b: any) => !b.finishedAt && !b.cancelled)) ensurePolling()
+  } catch { /* 损坏忽略 */ }
+}
 
 // ===== 工作流 =====
 const WF_KEY = 'selectedWorkflow:v1'
@@ -559,6 +576,7 @@ async function submitBatch() {
     progress.status = ''
     sessionBatches.value.unshift(res)
     selectedBatchId.value = res.id
+    saveBatches()
     ensurePolling()
   } catch(e:any){
     progress.status='error'
@@ -605,6 +623,7 @@ async function pollAll() {
     pollBusy = false
   }
   if (newlyDone) refreshHistory()
+  saveBatches() // 状态有推进就落 localStorage，刷新后批次列表不丢
   // 仅当全部批次都结束时才停轮询；还有未完成的必须继续盯（否则后面的批次永远卡在排队中）
   if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) {
     stopPolling()
@@ -717,6 +736,7 @@ function clearBatches() {
   sessionBatches.value = []
   selectedBatchId.value = ''
   seenDoneIds.clear()
+  saveBatches()
   stopPolling()
 }
 function resetInputs() {
@@ -929,6 +949,7 @@ function loadGenSettings() {
 onMounted(() => {
   loadGenSettings()
   loadWorkflows()
+  loadPersistedBatches()
   refreshHistory()
   $fetch('/api/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
   window.addEventListener('keydown', onKeydown)
