@@ -3,54 +3,69 @@
     <main class="cols">
       <!-- 左栏：参数输入 -->
       <div class="col col-input">
-      <!-- ⓪ 工作流选择 -->
-      <div class="wf-bar card">
-        <div class="wf-bar-title">📂 工作流</div>
-        <div class="wf-chips">
-          <div
-            v-for="wf in workflows"
-            :key="wf.file"
-            class="wf-chip"
-            :class="{ active: wf.file === selectedFile, broken: wf.broken }"
-            @click="selectWorkflow(wf)"
-          >
-            <span class="wf-name">{{ wf.name }}</span>
-            <span class="wf-meta">
-              <template v-if="runningOnWorkflow(wf.file)">● 批量进行中</template>
-              <template v-else-if="wf.broken">JSON 解析失败</template>
-              <template v-else>{{ wf.nodeCount }} 节点</template>
-            </span>
-          </div>
-          <span v-if="workflows.length === 0" class="empty" style="padding:0">暂无工作流</span>
-        </div>
+      <!-- ⓪ 工作流选择（紧凑下拉菜单） -->
+      <div class="wf-bar card compact">
+        <span class="wf-sel-icon">📂</span>
+        <select class="wf-select" :value="selectedFile" @change="onWfSelect($event)">
+          <option v-if="!workflows.length" value="">暂无工作流</option>
+          <option v-for="wf in workflows" :key="wf.file" :value="wf.file" :disabled="wf.broken">
+            {{ wf.name }}{{ runningOnWorkflow(wf.file) ? ' ● 进行中' : '' }}{{ wf.broken ? '（JSON 解析失败）' : '' }}
+          </option>
+        </select>
+        <span v-if="runningCount" class="wf-running" title="有批次正在生成">● {{ runningCount }} 进行中</span>
       </div>
 
-      <!-- ① 常用参数 & 高级参数 & 参考图 & 提示词 & 生成设置 -->
+      <!-- ① 生成控制 & 提示词 & 参考图 & 参数 -->
       <div class="card">
-        <!-- 常用参数（常驻展示，一行排列） -->
-        <div v-if="commonFields.length" class="node-group common">
-          <div class="group-title">🎛 常用参数</div>
-          <div class="common-row">
-            <div v-for="f in commonFields" :key="f.uid" class="field">
-              <FieldControl :field="f" v-model="form[f.uid]" />
+        <!-- 生成按钮（最上面） -->
+        <div class="gen-actions top">
+          <span class="plan" :class="{ warn: !canSubmit }">{{ planText }}</span>
+          <button class="btn primary" :disabled="submitting || !canSubmit" title="快捷键：Ctrl+Enter" @click="submitBatch">▶ 开始批量生成 <kbd class="kbd-hint">Ctrl+↵</kbd></button>
+        </div>
+        <div v-if="progress.status === 'error'" class="status-line error" style="margin-top:8px">{{ progress.message }}</div>
+
+        <!-- 批次 / seed -->
+        <div class="gen-row">
+          <div class="gen-block grow">
+            <label>批次（每张图跑几单）</label>
+            <div class="seed-row">
+              <input type="number" min="1" max="50" v-model.number="batchCount" />
+              <div class="quick-row">
+                <button v-for="n in [1,2,3,4]" :key="n" class="btn quick" :class="{ on: batchCount===n }" @click="batchCount=n">{{ n }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="gen-block grow">
+            <label class="inline-label">
+              <input type="checkbox" v-model="autoRandSeed" />
+              每单自动随机 seed
+            </label>
+            <div v-if="!autoRandSeed" class="seed-row" style="margin-top:6px">
+              <input type="number" v-model.number="fixedSeedVal" placeholder="所有单复用这个 seed" />
+            </div>
+            <div v-else-if="seedReuseActive" class="seed-reuse" style="margin-top:6px">
+              🌱 复用中 seed：<b>{{ fixedSeedVal }}</b>（本批结束后恢复自动随机）
             </div>
           </div>
         </div>
 
-        <!-- 高级参数（折叠） -->
-        <div v-if="advancedFields.length" class="node-group adv">
-          <div class="group-title" @click="toggleAdv">
-            ⚙️ 高级参数（一般不用动）
-            <span class="muted">{{ advOpen ? '▾ 收起' : '▸ 展开' }}</span>
-          </div>
-          <template v-if="advOpen">
-            <div v-for="f in advancedFields" :key="f.uid" class="field">
-              <FieldControl :field="f" v-model="form[f.uid]" />
+        <!-- 提示词区：中（主要编辑区，独占加高）在前，首/尾一行在后 -->
+        <template v-for="(row, ri) in promptRowsOrdered" :key="'pr'+ri">
+          <div :class="['prompt-row', { multi: row.length > 1 }]">
+            <div v-for="group in row" :key="group.nodeId" class="node-group">
+              <div class="group-title row">
+                <span>✏️ {{ group.title }}</span>
+                <button v-if="group.title.includes('中')" class="btn mini" title="把剪贴板内容粘贴到「中」提示词" @click="pastePromptGroup(group)">📋 粘贴</button>
+                <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
+              </div>
+              <div v-for="f in group.fields" :key="f.uid" class="field">
+                <FieldControl :field="f" v-model="form[f.uid]" :hide-label="group.fields.length === 1 && group.fields[0].label === group.title" />
+              </div>
             </div>
-          </template>
-        </div>
+          </div>
+        </template>
 
-        <!-- 参考图队列（在首尾提示词上方，主要编辑区就近取图） -->
+        <!-- 参考图队列（在提示词下方） -->
         <div class="card nested">
           <h2>
             🖼 参考图（{{ images.length }}）
@@ -106,74 +121,28 @@
           </template>
         </div>
 
-        <!-- 提示词区（首/尾一行，中独占一行加大） -->
-        <template v-for="(row, ri) in promptRows" :key="'pr'+ri">
-          <div :class="['prompt-row', { multi: row.length > 1 }]">
-            <div v-for="group in row" :key="group.nodeId" class="node-group">
-              <div class="group-title row">
-                <span>✏️ {{ group.title }}</span>
-                <button v-if="group.title.includes('中')" class="btn mini" title="把剪贴板内容粘贴到「中」提示词" @click="pastePromptGroup(group)">📋 粘贴</button>
-                <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
-              </div>
-              <div v-for="f in group.fields" :key="f.uid" class="field">
-                <FieldControl :field="f" v-model="form[f.uid]" :hide-label="group.fields.length === 1 && group.fields[0].label === group.title" />
-              </div>
+        <!-- 常用参数（常驻展示，一行排列） -->
+        <div v-if="commonFields.length" class="node-group common">
+          <div class="group-title">🎛 常用参数</div>
+          <div class="common-row">
+            <div v-for="f in commonFields" :key="f.uid" class="field">
+              <FieldControl :field="f" v-model="form[f.uid]" />
             </div>
-          </div>
-        </template>
-
-        <!-- 生成控制 -->
-        <div class="gen-options">
-          <div class="gen-row">
-            <div class="gen-block grow">
-              <label>批次（每张图跑几单）</label>
-              <div class="seed-row">
-                <input type="number" min="1" max="50" v-model.number="batchCount" />
-                <div class="quick-row">
-                  <button v-for="n in [1,2,3,4]" :key="n" class="btn quick" :class="{ on: batchCount===n }" @click="batchCount=n">{{ n }}</button>
-                </div>
-              </div>
-            </div>
-            <div class="gen-block grow">
-              <label class="inline-label">
-                <input type="checkbox" v-model="autoRandSeed" />
-                每单自动随机 seed
-              </label>
-              <div v-if="!autoRandSeed" class="seed-row" style="margin-top:6px">
-                <input type="number" v-model.number="fixedSeedVal" placeholder="所有单复用这个 seed" />
-              </div>
-              <div v-else-if="seedReuseActive" class="seed-reuse" style="margin-top:6px">
-                🌱 复用中 seed：<b>{{ fixedSeedVal }}</b>（本批结束后恢复自动随机）
-              </div>
-            </div>
-          </div>
-
-          <div class="gen-actions">
-            <span class="plan" :class="{ warn: !canSubmit }">{{ planText }}</span>
-            <button class="btn primary" :disabled="submitting || !canSubmit" title="快捷键：Ctrl+Enter" @click="submitBatch">▶ 开始批量生成 <kbd class="kbd-hint">Ctrl+↵</kbd></button>
           </div>
         </div>
 
-        <!-- 批次列表：可连续提交多批，互不阻塞 -->
-        <div v-if="sessionBatches.length" class="batch-list">
-          <div class="batch-list-title">📋 本会话批次（{{ runningCount }} 进行中 · 点击行查看结果）</div>
-          <div
-            v-for="b in sessionBatches"
-            :key="b.id"
-            class="batch-row"
-            :class="{ sel: b.id === selectedBatchId, done: !!b.finishedAt && !b.cancelled, cancelled: b.cancelled }"
-            @click="selectedBatchId = b.id"
-          >
-            <div class="batch-row-head">
-              <span class="batch-wf">{{ shortWf(b.workflow) }}</span>
-              <span class="batch-info">{{ batchTextOf(b) }}</span>
-              <button v-if="!b.finishedAt && !b.cancelled" class="btn mini danger" @click.stop="stopBatch(b.id)">⏹ 停止</button>
-              <span v-else class="batch-tag" :class="{ ok: !!b.finishedAt && !b.cancelled }">{{ b.cancelled ? '已停止' : '完成' }}</span>
-            </div>
-            <div class="progress-track"><div class="progress-bar" :style="{ width: percentOf(b) + '%' }"></div></div>
+        <!-- 高级参数（折叠） -->
+        <div v-if="advancedFields.length" class="node-group adv">
+          <div class="group-title" @click="toggleAdv">
+            ⚙️ 高级参数（一般不用动）
+            <span class="muted">{{ advOpen ? '▾ 收起' : '▸ 展开' }}</span>
           </div>
+          <template v-if="advOpen">
+            <div v-for="f in advancedFields" :key="f.uid" class="field">
+              <FieldControl :field="f" v-model="form[f.uid]" />
+            </div>
+          </template>
         </div>
-        <div v-if="progress.status === 'error'" class="status-line error" style="margin-top:8px">{{ progress.message }}</div>
       </div>
       </div>
 
@@ -194,6 +163,29 @@
               <span v-if="fmtDur(r.durationMs)" class="time-chip" title="该单生成耗时">⏱ {{ fmtDur(r.durationMs) }}</span>
               <a class="btn mini" :href="r.src" :download="r.filename">下载</a>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ③½ 本会话批次（固定高度，最近产出上方） -->
+      <div class="card batch-list-card">
+        <h2>📋 本会话批次（{{ runningCount }} 进行中 · 点击行查看结果）</h2>
+        <div v-if="!sessionBatches.length" class="empty">还没有批次，点击左侧「开始批量生成」发起</div>
+        <div v-else class="batch-list">
+          <div
+            v-for="b in sessionBatches"
+            :key="b.id"
+            class="batch-row"
+            :class="{ sel: b.id === selectedBatchId, done: !!b.finishedAt && !b.cancelled, cancelled: b.cancelled }"
+            @click="selectedBatchId = b.id"
+          >
+            <div class="batch-row-head">
+              <span class="batch-wf">{{ shortWf(b.workflow) }}</span>
+              <span class="batch-info">{{ batchTextOf(b) }}</span>
+              <button v-if="!b.finishedAt && !b.cancelled" class="btn mini danger" @click.stop="stopBatch(b.id)">⏹ 停止</button>
+              <span v-else class="batch-tag" :class="{ ok: !!b.finishedAt && !b.cancelled }">{{ b.cancelled ? '已停止' : '完成' }}</span>
+            </div>
+            <div class="progress-track"><div class="progress-bar" :style="{ width: percentOf(b) + '%' }"></div></div>
           </div>
         </div>
       </div>
@@ -423,6 +415,19 @@ const promptRows = computed(() => {
   }
   return gs.map(g => [g])
 })
+// 「中」提示词是主编辑区：渲染时排到首/尾前面
+const promptRowsOrdered = computed(() => {
+  const rows = promptRows.value
+  const midRow = rows.find(r => r.length === 1 && r[0].title.includes('中'))
+  if (!midRow) return rows
+  return [midRow, ...rows.filter(r => r !== midRow)]
+})
+// 工作流下拉
+const selectedWf = computed(() => workflows.value.find(w => w.file === selectedFile.value) || null)
+function onWfSelect(e: Event) {
+  const wf = workflows.value.find(w => w.file === (e.target as HTMLSelectElement).value)
+  if (wf) selectWorkflow(wf)
+}
 // 常用参数：需要常驻展示（不折叠进高级参数）的节点标题
 const COMMON_TITLES = ['Resolution Selector (Size)', 'Float (Duration)']
 function isCommonField(f: FieldDef): boolean {
@@ -961,6 +966,10 @@ function onVisibility() {
   if (sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) pollAll()
   refreshHistory(true)
 }
+// 浏览器标签页标题反映任务进行状态（切到别的标签页也能瞄到进度）
+watch(runningCount, (n) => {
+  document.title = n > 0 ? `▶ ${n} 个批次进行中 · ComfyUI Studio` : 'ComfyUI Studio'
+}, { immediate: true })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   document.removeEventListener('visibilitychange', onVisibility)
