@@ -203,7 +203,6 @@
         <h2>
           🗂 最近产出（{{ history.length }}）
           <button class="btn mini" title="快捷键：R（非输入状态）" @click="refreshHistory(true)" style="margin-left:auto">刷新 <kbd class="kbd-hint">R</kbd></button>
-          <button class="btn mini danger" @click="clearHistory">一键清空</button>
         </h2>
         <div v-if="history.length === 0" class="empty">暂无历史产出</div>
         <div v-else class="grid">
@@ -540,6 +539,7 @@ async function submitBatch() {
   if (!valid.length) { alert('请先上传参考图'); return }
   if (!graph.value || submitting.value) return
 
+  mgmt?.ensureAudio?.() // 用户手势期预热 AudioContext，完成音效才能正常出声
   submitting.value = true
   // 复用中：这批固定用复用的 seed；否则按勾选的随机模式
   const useFixed = seedReuseActive.value || !autoRandSeed.value
@@ -606,7 +606,11 @@ async function pollAll() {
   }
   if (newlyDone) refreshHistory()
   // 仅当全部批次都结束时才停轮询；还有未完成的必须继续盯（否则后面的批次永远卡在排队中）
-  if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) stopPolling()
+  if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) {
+    stopPolling()
+    // 本会话最后一个批次完成 → 播放提示音
+    if (soundEnabled.value) playChime()
+  }
 }
 function stopPolling() {
   if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
@@ -698,6 +702,34 @@ function clearHistory() {
   saveCleared()
   history.value = []
 }
+
+// ===== 完成音效 / 管理菜单栏（引擎在 app.vue，这里注册页面级动作）=====
+const mgmt = inject<any>('mgmt', null)
+const soundEnabled = computed(() => mgmt?.soundEnabled?.value ?? false)
+if (mgmt) {
+  mgmt.mgmtActions.clearHistory = clearHistory
+  mgmt.mgmtActions.clearBatches = clearBatches
+  mgmt.mgmtActions.resetInputs = resetInputs
+}
+function clearBatches() {
+  const running = runningCount.value
+  if (running > 0 && !confirm(`还有 ${running} 个批次进行中，清空列表后将不再显示它们的进度（服务器上仍会继续生成并出现在最近产出）。确定清空？`)) return
+  sessionBatches.value = []
+  selectedBatchId.value = ''
+  seenDoneIds.clear()
+  stopPolling()
+}
+function resetInputs() {
+  if (!confirm('清空参考图和全部提示词输入？（seed 等参数保持不变）')) return
+  clearImages()
+  for (const f of fields.value) {
+    if (f.kind === 'textarea' || f.kind === 'text') form[f.uid] = ''
+  }
+  scheduleFormSave()
+  showToast('已重置输入区')
+}
+
+
 // ===== 资产全参数复用 =====
 // 资产提示词摘要展示（仅文本）
 function promptText(item: any): string {
