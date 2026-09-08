@@ -150,7 +150,7 @@
 
           <div class="gen-actions">
             <span class="plan" :class="{ warn: !canSubmit }">{{ planText }}</span>
-            <button class="btn primary" :disabled="submitting || !canSubmit" @click="submitBatch">▶ 开始批量生成</button>
+            <button class="btn primary" :disabled="submitting || !canSubmit" title="快捷键：Ctrl+Enter" @click="submitBatch">▶ 开始批量生成 <kbd class="kbd-hint">Ctrl+↵</kbd></button>
           </div>
         </div>
 
@@ -202,7 +202,7 @@
       <div class="card history-card">
         <h2>
           🗂 最近产出（{{ history.length }}）
-          <button class="btn mini" @click="refreshHistory" style="margin-left:auto">刷新</button>
+          <button class="btn mini" title="快捷键：R（非输入状态）" @click="refreshHistory(true)" style="margin-left:auto">刷新 <kbd class="kbd-hint">R</kbd></button>
           <button class="btn mini danger" @click="clearHistory">一键清空</button>
         </h2>
         <div v-if="history.length === 0" class="empty">暂无历史产出</div>
@@ -824,7 +824,21 @@ function openViewer(src: string, filename: string, kind: 'image' | 'video' = 'im
   viewer.value = { src, filename, kind }
 }
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') viewer.value = null
+  if (e.key === 'Escape') { viewer.value = null; return }
+  // Ctrl/Cmd+Enter：开始批量生成（提示词输入框内也可触发）
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault()
+    if (!submitting.value && canSubmit.value) submitBatch()
+    return
+  }
+  // R：刷新最近产出（仅在非输入焦点时生效，避免打字冲突）
+  if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const t = e.target as HTMLElement | null
+    const tag = t?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
+    e.preventDefault()
+    refreshHistory(true)
+  }
 }
 
 // ===== 生成计划提示 =====

@@ -359,6 +359,15 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .btn.small { padding: 6px 12px; font-size: 12.5px; }
 .btn.mini { padding: 3px 9px; font-size: 12px; font-weight: 500; box-shadow: none; }
 .btn.mini:hover { transform: none; }
+/* 快捷键提示徽标 */
+.kbd-hint {
+  display: inline-block; margin-left: 4px; padding: 0 5px;
+  font-size: 10.5px; line-height: 15px; font-family: var(--mono, monospace);
+  border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14); color: inherit; opacity: 0.85;
+  vertical-align: 1px; pointer-events: none;
+}
+.btn.mini .kbd-hint { border-color: var(--border); background: var(--card); font-size: 10px; line-height: 14px; }
 
 /* ---------- 进度 ---------- */
 .progress-wrap { display: flex; align-items: center; gap: 14px; }
