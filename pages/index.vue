@@ -195,6 +195,7 @@
         <h2>
           🗂 最近产出（{{ history.length }}）
           <button class="btn mini" title="快捷键：R（非输入状态）" @click="refreshHistory(true)" style="margin-left:auto">刷新 <kbd class="kbd-hint">R</kbd></button>
+          <button class="btn mini danger" title="隐藏当前显示的全部历史资产（不影响服务器上的文件）" @click="clearHistory">🧹 清空</button>
         </h2>
         <div v-if="history.length === 0" class="empty">暂无历史产出</div>
         <div v-else class="grid">
@@ -211,6 +212,7 @@
               <span v-if="fmtDur(item.durationMs)" class="time-chip" title="生成耗时">⏱ {{ fmtDur(item.durationMs) }}</span>
               <span class="fn" :title="item.promptId">{{ item.outputs.length }} 个 · {{ item.promptId.slice(0, 8) }}…</span>
               <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0])" :download="item.outputs[0].filename">下载</a>
+              <button class="btn mini danger" title="从最近产出中隐藏该资产（不影响服务器上的文件）" @click="deleteHistoryItem(item)">🗑</button>
             </div>
           </div>
         </div>
@@ -378,7 +380,7 @@ function extractFields(g: any): FieldDef[] {
       // 主提示词输入名：label 直接用节点标题（如 CLIP Text Encode (Positive Prompt)）
       const isMainTextName = /^(text|prompt|value|text_0)$/i.test(name)
       const forceText = /^CLIPTextEncode/.test(ct) // CLIP 文本编码节点恒为提示词框（即使内容很短）
-      if (typeof value === 'number') { kind = 'number'; isSeed = /seed/i.test(name); if (!isSeed) step = Number.isInteger(value) ? 1 : 0.01 }
+      if (typeof value === 'number') { kind = 'number'; isSeed = /seed/i.test(name); if (!isSeed) step = name === 'megapixels' ? 0.1 : Number.isInteger(value) ? 1 : 0.01 }
       else if (typeof value === 'boolean') kind = 'bool'
       else if (typeof value === 'string') {
         if (name === 'lora_name') { kind='select'; options=loraOptions.value.length?loraOptions.value:[String(value)] }
@@ -632,8 +634,8 @@ async function pollAll() {
   // 仅当全部批次都结束时才停轮询；还有未完成的必须继续盯（否则后面的批次永远卡在排队中）
   if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) {
     stopPolling()
-    // 本会话最后一个批次完成 → 播放提示音
-    if (soundEnabled.value) playChime()
+    // 本会话全部批次完成 → 播放提示音（loud：重复 3 遍，确保能及时发现）
+    if (soundEnabled.value) playChime(true)
   }
 }
 function stopPolling() {
@@ -725,6 +727,12 @@ function clearHistory() {
   for (const it of history.value) clearedIds.add(it.promptId)
   saveCleared()
   history.value = []
+}
+// 删除单个：与清空同机制（promptId 进隐藏集合），仅影响列表显示，不动服务器文件
+function deleteHistoryItem(it: any) {
+  clearedIds.add(it.promptId)
+  saveCleared()
+  history.value = history.value.filter(x => x.promptId !== it.promptId)
 }
 
 // ===== 完成音效 / 管理菜单栏（引擎在 app.vue，这里注册页面级动作）=====
@@ -968,7 +976,9 @@ function onVisibility() {
 }
 // 浏览器标签页标题反映任务进行状态（切到别的标签页也能瞄到进度）
 watch(runningCount, (n) => {
-  document.title = n > 0 ? `▶ ${n} 个批次进行中 · ComfyUI Studio` : 'ComfyUI Studio'
+  // 归零时有真正跑完（非全部手动取消）的批次 → 标题标记完成，方便切走时发现
+  const allDone = n === 0 && sessionBatches.value.some(b => b.finishedAt && !b.cancelled)
+  document.title = n > 0 ? `▶ ${n} 个批次进行中 · ComfyUI Studio` : (allDone ? '✅ 全部完成 · ComfyUI Studio' : 'ComfyUI Studio')
 }, { immediate: true })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)

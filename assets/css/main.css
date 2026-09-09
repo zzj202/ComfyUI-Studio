@@ -690,7 +690,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .prompt-row.multi > .node-group { flex: 1; min-width: 0; }
 @media (max-width: 700px) { .prompt-row.multi { flex-direction: column; } }
 /* 「中」提示词独占一行 = 主要编辑区：加高输入框 */
-.prompt-row:not(.multi) textarea { min-height: 200px; }
+.prompt-row:not(.multi) textarea { min-height: calc(1.6em * 12 + 17px); font-size: 15.5px; } /* 12 行 + 中提示词字号加大（行高1.6 + 上下padding8×2 + 边框1×2） */
 /* 卡片内嵌套子卡片（参考图模块嵌在参数卡内） */
 .card.nested { margin-bottom: 14px; padding: 14px 16px; background: color-mix(in srgb, var(--card) 88%, #7c7cff 12%); }
 

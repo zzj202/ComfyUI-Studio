@@ -12,7 +12,6 @@
           <span>{{ healthText }}</span>
         </div>
         <button class="btn small" :title="soundEnabled ? '批次完成提示音：已开启，点击关闭' : '批次完成提示音：已关闭，点击开启'" @click="toggleSound">{{ soundEnabled ? '🔔 音效开' : '🔕 音效关' }}</button>
-        <button v-if="mgmtActions.clearHistory" class="btn small" title="隐藏当前显示的全部历史资产（不影响服务器上的文件）" @click="mgmtActions.clearHistory()">🧹 清空最近产出</button>
         <button v-if="mgmtActions.clearBatches" class="btn small" title="收起下方本会话批次列表（不影响服务器上正在进行的生成）" @click="mgmtActions.clearBatches()">🗑 清空批次列表</button>
         <button v-if="mgmtActions.resetInputs" class="btn small" title="清空参考图与全部提示词输入" @click="mgmtActions.resetInputs()">♻️ 重置输入区</button>
         <a v-if="health.base" class="btn small" :href="health.base" target="_blank" title="在新标签页打开 ComfyUI 原生界面">🖥 ComfyUI</a>
@@ -131,25 +130,39 @@ function ensureAudio() {
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
   } catch { audioCtx = null }
 }
-function playChime() {
-  try {
-    ensureAudio()
-    if (!audioCtx || audioCtx.state !== 'running') return
-    const t = audioCtx.currentTime
-    // A5 → E6 双音上行「叮咚」
-    ;[880, 1318.5].forEach((f, i) => {
+function chime(loud: boolean) {
+  if (!audioCtx || audioCtx.state !== 'running') return
+  const t0 = audioCtx.currentTime
+  const rounds = loud ? 3 : 1 // 全部批次完成 → 重复 3 遍，人在别处也能听见
+  for (let r = 0; r < rounds; r++) {
+    const t = t0 + r * 1.5
+    // A5 → C#6 → E6 上行三连音「叮-叮-咚」（音量大、尾音长）
+    ;[880, 1108.7, 1318.5].forEach((f, i) => {
       const o = audioCtx!.createOscillator()
       const g = audioCtx!.createGain()
       o.type = 'sine'
       o.frequency.value = f
-      const st = t + i * 0.13
+      const st = t + i * 0.18
       g.gain.setValueAtTime(0.0001, st)
-      g.gain.linearRampToValueAtTime(0.16, st + 0.02)
-      g.gain.exponentialRampToValueAtTime(0.0001, st + 0.55)
+      g.gain.linearRampToValueAtTime(0.45, st + 0.02)
+      g.gain.exponentialRampToValueAtTime(0.0001, st + 1.1)
       o.connect(g).connect(audioCtx!.destination)
       o.start(st)
-      o.stop(st + 0.6)
+      o.stop(st + 1.2)
     })
+  }
+}
+function playChime(loud = false) {
+  try {
+    ensureAudio()
+    if (!audioCtx) return
+    if (audioCtx.state !== 'running') {
+      // AudioContext 恢复是异步的：等 resume 成功后再补播，避免后台标签页时静默失败
+      const ctx = audioCtx
+      ctx.resume?.().then(() => { if (ctx.state === 'running') chime(loud) }).catch(() => {})
+      return
+    }
+    chime(loud)
   } catch { /* 音效失败不影响主流程 */ }
 }
 function toggleSound() {
