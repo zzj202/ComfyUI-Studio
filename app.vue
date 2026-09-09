@@ -130,8 +130,21 @@ function ensureAudio() {
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
   } catch { audioCtx = null }
 }
+// 后备提示音：WebAudio 不可用/被暂停时，直接播 public/beep.wav（不依赖 AudioContext）
+function fallbackBeep(loud: boolean) {
+  const rounds = loud ? 3 : 1
+  for (let i = 0; i < rounds; i++) {
+    setTimeout(() => {
+      try {
+        const a = new Audio('/beep.wav')
+        a.volume = 1
+        a.play().catch(() => console.warn('[chime] 后备提示音播放失败（可能被浏览器拦截）'))
+      } catch { console.warn('[chime] 后备提示音异常') }
+    }, i * 1500)
+  }
+}
 function chime(loud: boolean) {
-  if (!audioCtx || audioCtx.state !== 'running') return
+  if (!audioCtx || audioCtx.state !== 'running') { fallbackBeep(loud); return }
   const t0 = audioCtx.currentTime
   const rounds = loud ? 3 : 1 // 全部批次完成 → 重复 3 遍，人在别处也能听见
   for (let r = 0; r < rounds; r++) {
@@ -155,15 +168,18 @@ function chime(loud: boolean) {
 function playChime(loud = false) {
   try {
     ensureAudio()
-    if (!audioCtx) return
+    if (!audioCtx) { console.warn('[chime] WebAudio 不可用 → 后备提示音'); fallbackBeep(loud); return }
     if (audioCtx.state !== 'running') {
-      // AudioContext 恢复是异步的：等 resume 成功后再补播，避免后台标签页时静默失败
+      // AudioContext 恢复是异步的：等 resume 成功后再补播；恢复失败退回后备提示音
       const ctx = audioCtx
-      ctx.resume?.().then(() => { if (ctx.state === 'running') chime(loud) }).catch(() => {})
+      ctx.resume?.().then(() => {
+        if (ctx.state === 'running') chime(loud)
+        else { console.warn('[chime] AudioContext 恢复失败(state=' + ctx.state + ') → 后备提示音'); fallbackBeep(loud) }
+      }).catch(() => { console.warn('[chime] AudioContext resume 异常 → 后备提示音'); fallbackBeep(loud) })
       return
     }
     chime(loud)
-  } catch { /* 音效失败不影响主流程 */ }
+  } catch (e) { console.warn('[chime] 播放异常 → 后备提示音', e); fallbackBeep(loud) }
 }
 function toggleSound() {
   soundEnabled.value = !soundEnabled.value

@@ -8,16 +8,21 @@ export default defineEventHandler(async (event) => {
       timeout: 10000
     })
     const items = Object.entries<any>(h || {})
-      .map(([promptId, entry]) => ({
-        promptId,
-        completed: !!entry?.status?.completed,
-        status: entry?.status?.status_str || 'success',
-        outputs: normalizeOutputs(entry),
-        // 从提交时的 API 图里提取提示词文本：{ "节点ID.字段名": 文本 }
-        prompts: extractPrompts(entry),
-        // 生成耗时（毫秒）：execution_start → execution_success/error 时间戳差
-        durationMs: extractDurationMs(entry)
-      }))
+      .map(([promptId, entry]) => {
+        const ep = extractPrompts(entry)
+        return {
+          promptId,
+          completed: !!entry?.status?.completed,
+          status: entry?.status?.status_str || 'success',
+          outputs: normalizeOutputs(entry),
+          // 从提交时的 API 图里提取提示词文本：{ "节点ID.字段名": 文本 }
+          prompts: ep.prompts,
+          // 节点标题映射：{ "节点ID.字段名": 节点_meta.title }，用于前端识别「中」提示词
+          promptTitles: ep.promptTitles,
+          // 生成耗时（毫秒）：execution_start → execution_success/error 时间戳差
+          durationMs: extractDurationMs(entry)
+        }
+      })
       .filter((it) => it.outputs.length > 0)
       .reverse() // ComfyUI 返回按完成先后排序（旧→新），反转成最新在前
       .slice(0, max)
@@ -41,22 +46,26 @@ function extractDurationMs(entry: any): number | null {
   return null
 }
 
-/** 提取提交图中的文本类输入（提示词）与 seed，uid 与前端表单一致："nodeId.inputName" */
-function extractPrompts(entry: any): Record<string, any> {
+/** 提取提交图中的文本类输入（提示词）与 seed，uid 与前端表单一致："nodeId.inputName"；同时返回节点标题 */
+function extractPrompts(entry: any): { prompts: Record<string, any>; promptTitles: Record<string, string> } {
   const graph = entry?.prompt?.[2] || {}
-  const out: Record<string, any> = {}
+  const prompts: Record<string, any> = {}
+  const promptTitles: Record<string, string> = {}
   for (const [nodeId, node] of Object.entries<any>(graph)) {
     const inputs = node?.inputs || {}
+    const title = String(node?._meta?.title || '')
     for (const [name, value] of Object.entries<any>(inputs)) {
-      // 文本输入：常见为 CLIPTextEncode 的 text，以及名字带 prompt/caption 的字符串
-      if (typeof value === 'string' && value.trim() && (name === 'text' || /prompt|caption|query/i.test(name))) {
-        out[`${nodeId}.${name}`] = value
+      // 文本输入：常见为 CLIPTextEncode 的 text、PrimitiveStringMultiline 的 value，以及名字带 prompt/caption 的字符串
+      if (typeof value === 'string' && value.trim() && (name === 'text' || name === 'value' || /prompt|caption|query/i.test(name))) {
+        const uid = `${nodeId}.${name}`
+        prompts[uid] = value
+        if (title) promptTitles[uid] = title
       }
       // seed（含 noise_seed 等），用于一键复现
       else if (typeof value === 'number' && /seed/i.test(name)) {
-        out[`${nodeId}.${name}`] = value
+        prompts[`${nodeId}.${name}`] = value
       }
     }
   }
-  return out
+  return { prompts, promptTitles }
 }

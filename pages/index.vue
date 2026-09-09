@@ -56,6 +56,7 @@
               <div class="group-title row">
                 <span>✏️ {{ group.title }}</span>
                 <button v-if="group.title.includes('中')" class="btn mini" title="把剪贴板内容粘贴到「中」提示词" @click="pastePromptGroup(group)">📋 粘贴</button>
+                <button v-if="group.title.includes('中')" class="btn mini" title="将提示词中的「小金毛」与「小白」互换" @click="swapPromptChars(group)">🔄 交换</button>
                 <button class="btn mini danger" @click="clearPromptGroup(group)">清空</button>
               </div>
               <div v-for="f in group.fields" :key="f.uid" class="field">
@@ -69,7 +70,7 @@
         <div class="card nested">
           <h2>
             🖼 参考图（{{ images.length }}）
-            <button class="btn mini" style="margin-left:auto" title="上传一个生成产物（图片/视频），按文件名反查其提交参数并一键复用全部参数" @click="($refs.assetFileInput as any)?.click()">♻️ 从资产复用</button>
+            <button class="btn mini" style="margin-left:auto" title="点击选择或直接拖拽一个生成产物（图片/视频）到此按钮，按文件名反查其提交参数并一键复用全部参数" @click="($refs.assetFileInput as any)?.click()" @dragover.prevent @drop.prevent="onAssetDrop">♻️ 从资产复用</button>
             <input ref="assetFileInput" type="file" accept="image/*,video/mp4,video/webm" hidden @change="onAssetFile" />
             <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
           </h2>
@@ -195,24 +196,29 @@
         <h2>
           🗂 最近产出（{{ history.length }}）
           <button class="btn mini" title="快捷键：R（非输入状态）" @click="refreshHistory(true)" style="margin-left:auto">刷新 <kbd class="kbd-hint">R</kbd></button>
-          <button class="btn mini danger" title="隐藏当前显示的全部历史资产（不影响服务器上的文件）" @click="clearHistory">🧹 清空</button>
+          <button class="btn mini danger" title="隐藏当前显示的全部历史资产（📌 固定的保留；不影响服务器上的文件）" @click="clearHistory">🧹 清空</button>
         </h2>
         <div v-if="history.length === 0" class="empty">暂无历史产出</div>
         <div v-else class="grid">
-          <div v-for="item in history" :key="item.promptId" class="result-item">
+          <div v-for="item in historyView" :key="item.promptId" :class="['result-item', { pinned: isPinned(item) }]" title="右键打开操作菜单" @click.capture="markRead(item)" @contextmenu.prevent="openCtxMenu($event, item)">
             <div class="result-media">
+              <span v-if="!isRead(item)" class="unread-badge" title="未读">NEW</span>
+              <span v-if="isPinned(item)" class="pin-badge" title="已固定（清空时保留）">📌</span>
               <template v-if="item.outputs.length">
-                <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0])" loading="lazy" @click="openViewer(mediaUrl(item.outputs[0]), item.outputs[0].filename, 'image')" />
-                <video v-else-if="item.outputs[0].kind === 'video'" :src="mediaUrl(item.outputs[0])" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(mediaUrl(item.outputs[0]), item.outputs[0].filename, 'video')" />
+                <img v-if="item.outputs[0].kind === 'image'" :src="mediaUrl(item.outputs[0])" loading="lazy" @click="openViewer(mediaUrl(item.outputs[0]), item.outputs[0].filename, 'image', item)" />
+                <template v-else-if="item.outputs[0].kind === 'video'">
+                  <video :src="mediaUrl(item.outputs[0])" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(mediaUrl(item.outputs[0]), item.outputs[0].filename, 'video', item)" />
+                  <span class="video-hint">▶ 悬停播放 · 点击放大</span>
+                </template>
               </template>
             </div>
-            <div v-if="promptText(item)" class="result-prompt" :title="promptText(item)">{{ promptText(item) }}</div>
             <div class="result-foot">
-              <button class="btn mini" title="读取该资产提交时的完整工作流：自动匹配工作流，还原所有参数（提示词/seed/分辨率/时长/LoRA）与参考图" @click="applyAssetParams(item)">♻️ 复用全部参数</button>
-              <span v-if="fmtDur(item.durationMs)" class="time-chip" title="生成耗时">⏱ {{ fmtDur(item.durationMs) }}</span>
-              <span class="fn" :title="item.promptId">{{ item.outputs.length }} 个 · {{ item.promptId.slice(0, 8) }}…</span>
-              <a v-if="item.outputs[0]" class="btn mini" :href="mediaUrl(item.outputs[0])" :download="item.outputs[0].filename">下载</a>
-              <button class="btn mini danger" title="从最近产出中隐藏该资产（不影响服务器上的文件）" @click="deleteHistoryItem(item)">🗑</button>
+              <div class="result-meta">
+                <span v-if="fmtDur(item.durationMs)" class="time-chip" title="生成耗时">⏱ {{ fmtDur(item.durationMs) }}</span>
+                <span class="fn asset-name" :title="assetName(item) || item.promptId"><template v-if="assetName(item)">🏷 {{ assetName(item) }}</template><template v-else>{{ item.promptId.slice(0, 8) }}…</template></span>
+                <button class="btn mini more-btn" title="更多操作：下载 / 复制中提示词 / 固定 / 重命名 / 删除（也可右键卡片）" @click.stop="openCtxMenu($event, item)">⋯</button>
+              </div>
+              <button class="btn mini reuse-btn" title="读取该资产提交时的完整工作流：自动匹配工作流，还原所有参数（提示词/seed/分辨率/时长/LoRA）与参考图" @click="applyAssetParams(item)">♻️ 复用全部参数</button>
             </div>
           </div>
         </div>
@@ -223,14 +229,43 @@
     <!-- 轻提示 -->
     <div v-if="toast" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e2235;color:#fff;padding:10px 20px;border-radius:12px;font-size:13px;z-index:200;box-shadow:0 8px 30px rgba(0,0,0,.25);pointer-events:none">{{ toast }}</div>
 
+    <!-- 资产右键菜单 -->
+    <div v-if="ctxMenu" style="position:fixed;inset:0;z-index:150" @click="ctxMenu = null" @contextmenu.prevent="ctxMenu = null"></div>
+    <div v-if="ctxMenu" class="ctx-menu" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }">
+      <button @click="ctxDo(applyAssetParams)">♻️ 复用全部参数</button>
+      <button @click="ctxDo(copyMidPrompt)">📋 复制中提示词</button>
+      <button @click="ctxDo(downloadItem)">⬇ 下载资产</button>
+      <button @click="ctxDo(renameAsset)">✏️ 重命名</button>
+      <button @click="ctxDo(togglePin)">{{ isPinned(ctxMenu.item) ? '📌 取消固定' : '📍 固定（清空时保留）' }}</button>
+      <button @click="ctxDo(toggleRead)">{{ isRead(ctxMenu.item) ? '👁 标为未读' : '👁 标为已读' }}</button>
+      <button class="danger" @click="ctxDo(deleteHistoryItem)">🗑 删除（隐藏）</button>
+    </div>
+
     <!-- 大图预览灯箱 -->
     <div v-if="viewer" class="lightbox" @click.self="viewer = null">
       <button class="lb-x" title="关闭" @click="viewer = null">✕</button>
-      <img v-if="viewer.kind === 'image'" :src="viewer.src" :alt="viewer.filename" />
-      <video v-else :src="viewer.src" controls autoplay loop></video>
-      <div class="lb-bar">
-        <span class="fn">{{ viewer.filename }}</span>
-        <a class="btn small" :href="viewer.src" :download="viewer.filename">⬇ 下载原图</a>
+      <div class="lb-wrap" :class="{ 'has-side': viewer.item }">
+        <div class="lb-media">
+          <img v-if="viewer.kind === 'image'" :src="viewer.src" :alt="viewer.filename" />
+          <video v-else :src="viewer.src" controls autoplay loop></video>
+          <div class="lb-bar">
+            <span class="fn">{{ viewer.item ? downloadName(viewer.item) : viewer.filename }}</span>
+            <a class="btn small" :href="viewer.src" :download="viewer.item ? downloadName(viewer.item) : viewer.filename">⬇ 下载原图</a>
+          </div>
+        </div>
+        <aside v-if="viewer.item" class="lb-side" @click.stop>
+          <div class="lb-side-title">📝 中提示词</div>
+          <div class="lb-side-text">{{ midPromptOf(viewer.item) || '（该资产没有中提示词）' }}</div>
+          <div class="lb-side-meta">
+            <span v-if="fmtDur(viewer.item.durationMs)">⏱ {{ fmtDur(viewer.item.durationMs) }}</span>
+            <span class="fn" :title="viewer.item.promptId">{{ viewer.item.promptId.slice(0, 8) }}…</span>
+          </div>
+          <div class="lb-side-actions">
+            <button class="btn mini" :title="isPinned(viewer.item) ? '取消固定' : '固定（清空最近产出时保留）'" @click="togglePin(viewer.item)">{{ isPinned(viewer.item) ? '📌 已固定' : '📍 固定' }}</button>
+            <button class="btn mini" title="重命名资产（下载文件名将使用该名称）" @click="renameAsset(viewer.item)">✏️ 重命名</button>
+            <button class="btn mini" @click="copyText(midPromptOf(viewer.item), '已复制中提示词')">📋 复制</button>
+          </div>
+        </aside>
       </div>
     </div>
   </div>
@@ -539,6 +574,18 @@ async function pastePromptGroup(group: { fields: FieldDef[] }) {
     alert('无法读取剪贴板（浏览器权限限制），请直接在输入框内 Ctrl+V 粘贴')
   }
 }
+// 交换「中」提示词中的角色：小金毛 ↔ 小白（借占位符防止两次替换互相覆盖）
+function swapPromptChars(group: { fields: FieldDef[] }) {
+  const f = group.fields.find(x => x.kind === 'textarea')
+  if (!f) return
+  const cur = String(form[f.uid] ?? '')
+  if (!cur.trim()) { toast.value = '提示词为空'; return }
+  const swapped = cur.replaceAll('小金毛', '\u0000').replaceAll('小白', '小金毛').replaceAll('\u0000', '小白')
+  if (swapped === cur) { toast.value = '提示词中没有「小金毛」或「小白」'; return }
+  form[f.uid] = swapped
+  scheduleFormSave()
+  toast.value = '已交换：小金毛 ↔ 小白'
+}
 
 // ===== 批量生成（支持连续提交多批，互不阻塞）=====
 const submitting = ref(false) // 仅在提交请求期间短暂锁定
@@ -636,6 +683,7 @@ async function pollAll() {
     stopPolling()
     // 本会话全部批次完成 → 播放提示音（loud：重复 3 遍，确保能及时发现）
     if (soundEnabled.value) playChime(true)
+    else console.info('[chime] 全部批次已完成，但音效开关为关，跳过播放')
   }
 }
 function stopPolling() {
@@ -715,6 +763,8 @@ async function flushHistory() {
     // max=100：窗口要足够大，避免新产出把旧产出挤出窗口导致「看起来没更新」
     const res: any = await $fetch('/api/history?max=100', { timeout: 12000 })
     history.value = (res.items || []).filter((it: any) => !clearedIds.has(it.promptId))
+    // 首次使用（无已读记录）：把当前已有资产全部标为已读，之后的新产出才显示未读
+    if (!readSeeded) { readSeeded = true; for (const it of history.value) readIds.add(it.promptId); saveRead() }
   } catch {
     histDirty = true // 拉取失败（网络抖动/ComfyUI 忙），保留脏标记等兜底重试
   } finally {
@@ -724,15 +774,105 @@ async function flushHistory() {
 // 兜底心跳：只要有待刷新就每 4s 重试（含批次全部结束后的终态保障）
 setInterval(() => { if (histDirty) flushHistory() }, 4000)
 function clearHistory() {
-  for (const it of history.value) clearedIds.add(it.promptId)
+  // 固定的资产不参与清空，保留在列表中
+  for (const it of history.value) if (!isPinned(it)) clearedIds.add(it.promptId)
   saveCleared()
-  history.value = []
+  history.value = history.value.filter(it => isPinned(it))
 }
 // 删除单个：与清空同机制（promptId 进隐藏集合），仅影响列表显示，不动服务器文件
 function deleteHistoryItem(it: any) {
   clearedIds.add(it.promptId)
   saveCleared()
   history.value = history.value.filter(x => x.promptId !== it.promptId)
+}
+
+// ===== 资产重命名：promptId → 自定义名称（localStorage 持久化），下载文件名随之 =====
+const RENAME_KEY = 'assetRenames:v1'
+const renames = reactive<Record<string, string>>(readJSON<Record<string, string>>(RENAME_KEY) || {})
+function saveRenames() {
+  try { localStorage.setItem(RENAME_KEY, JSON.stringify(renames)) } catch {}
+}
+function assetName(item: any): string { return renames[item.promptId] || '' }
+function renameAsset(item: any) {
+  const name = prompt('设置资产名称（下载文件名将使用该名称，留空清除）', renames[item.promptId] || '')
+  if (name === null) return
+  const t = name.trim()
+  if (t) renames[item.promptId] = t
+  else delete renames[item.promptId]
+  saveRenames()
+  if (t) showToast(`已命名：${t}`)
+}
+/** 下载文件名：有自定义名称则用「名称.原扩展名」，否则原始文件名 */
+function downloadName(item: any): string {
+  const fn = String(item?.outputs?.[0]?.filename || '')
+  const ext = fn.includes('.') ? fn.slice(fn.lastIndexOf('.')) : ''
+  const custom = renames[item.promptId]
+  return custom ? custom + ext : fn
+}
+
+// ===== 复制中提示词：优先取节点标题含「中」的文本，兜底取最长字符串提示词 =====
+function midPromptOf(item: any): string {
+  const titles = item?.promptTitles || {}
+  const prompts = item?.prompts || {}
+  const uid = Object.keys(prompts).find(u => typeof prompts[u] === 'string' && /中/.test(String(titles[u] || '')))
+  if (uid) return prompts[uid]
+  const texts = Object.values<any>(prompts).filter(v => typeof v === 'string') as string[]
+  return texts.sort((a, b) => b.length - a.length)[0] || ''
+}
+async function copyMidPrompt(item: any) {
+  const t = midPromptOf(item)
+  if (!t) { showToast('该资产没有可复制的中提示词'); return }
+  try { await navigator.clipboard.writeText(t); showToast('已复制中提示词') }
+  catch { showToast('复制失败（浏览器权限限制）') }
+}
+
+// ===== 未读/已读：点击过卡片即已读（localStorage 持久化）=====
+const READ_KEY = 'historyRead:v1'
+const readExisted = (() => { try { return localStorage.getItem(READ_KEY) !== null } catch { return true } })()
+let readSeeded = readExisted // 首次使用时把现有资产全部视为已读，避免满屏 NEW
+const readIds = reactive(new Set<string>(readJSON<string[]>(READ_KEY) || []))
+function saveRead() { try { localStorage.setItem(READ_KEY, JSON.stringify([...readIds].slice(-2000))) } catch {} }
+function isRead(item: any) { return readIds.has(item.promptId) }
+function markRead(item: any) { if (!readIds.has(item.promptId)) { readIds.add(item.promptId); saveRead() } }
+function toggleRead(item: any) {
+  if (readIds.has(item.promptId)) { readIds.delete(item.promptId); showToast('已标为未读') }
+  else { readIds.add(item.promptId); showToast('已标为已读') }
+  saveRead()
+}
+
+// ===== 固定：固定的资产在「清空最近产出」时保留，并排在列表最前（localStorage 持久化）=====
+const PIN_KEY = 'historyPins:v1'
+const pinIds = reactive(new Set<string>(readJSON<string[]>(PIN_KEY) || []))
+function savePins() { try { localStorage.setItem(PIN_KEY, JSON.stringify([...pinIds].slice(-500))) } catch {} }
+function isPinned(item: any) { return pinIds.has(item.promptId) }
+function togglePin(item: any) {
+  if (pinIds.has(item.promptId)) { pinIds.delete(item.promptId); showToast('已取消固定') }
+  else { pinIds.add(item.promptId); showToast('已固定，清空最近产出时将保留') }
+  savePins()
+}
+const historyView = computed(() => {
+  const arr = [...history.value]
+  arr.sort((a, b) => Number(isPinned(b)) - Number(isPinned(a)))
+  return arr
+})
+
+// ===== 右键菜单 =====
+const ctxMenu = ref<{ x: number; y: number; item: any } | null>(null)
+function openCtxMenu(e: MouseEvent, item: any) {
+  const mw = 200, mh = 330
+  ctxMenu.value = { x: Math.min(e.clientX, window.innerWidth - mw - 8), y: Math.min(e.clientY, window.innerHeight - mh - 8), item }
+}
+function ctxDo(fn: (item: any) => any) {
+  const it = ctxMenu.value?.item
+  ctxMenu.value = null
+  if (it) fn(it)
+}
+function downloadItem(item: any) {
+  const o = item?.outputs?.[0]
+  if (!o) { showToast('该资产没有可下载的文件'); return }
+  const a = document.createElement('a')
+  a.href = mediaUrl(o); a.download = downloadName(item)
+  document.body.appendChild(a); a.click(); a.remove()
 }
 
 // ===== 完成音效 / 管理菜单栏（引擎在 app.vue，这里注册页面级动作）=====
@@ -764,13 +904,6 @@ function resetInputs() {
 
 
 // ===== 资产全参数复用 =====
-// 资产提示词摘要展示（仅文本）
-function promptText(item: any): string {
-  return Object.entries<any>(item?.prompts || {})
-    .filter(([, v]) => typeof v === 'string')
-    .map(([, v]) => v)
-    .join(' / ')
-}
 // 读取资产提交时的完整工作流图（/api/asset-params）：自动匹配本地工作流 → 精确还原所有参数 + seed 复用中 + 参考图
 const applyingParams = ref(false)
 const toast = ref('')
@@ -796,11 +929,19 @@ async function applyAssetParams(item: any) {
 }
 
 // 上传一个生成产物（图片/视频），按文件名在最近产出里反查对应资产并复用其全部参数
-async function onAssetFile(e: Event) {
+function onAssetFile(e: Event) {
   const input = e.target as HTMLInputElement
   const f = input.files?.[0]
   input.value = ''
-  if (!f || applyingParams.value) return
+  if (f) applyAssetFile(f)
+}
+// 拖拽资产文件到「从资产复用」按钮上直接复用
+function onAssetDrop(e: DragEvent) {
+  const f = e.dataTransfer?.files?.[0]
+  if (f) applyAssetFile(f)
+}
+async function applyAssetFile(f: File) {
+  if (applyingParams.value) return
   applyingParams.value = true
   try {
     const res: any = await $fetch('/api/asset-params', { params: { filename: f.name } })
@@ -884,9 +1025,14 @@ function hoverPlay(e: Event) {
 function hoverPause(e: Event) {
   ;(e.target as HTMLVideoElement).pause()
 }
-const viewer = ref<{ src: string; filename: string; kind: 'image' | 'video' } | null>(null)
-function openViewer(src: string, filename: string, kind: 'image' | 'video' = 'image') {
-  viewer.value = { src, filename, kind }
+const viewer = ref<{ src: string; filename: string; kind: 'image' | 'video'; item: any | null } | null>(null)
+function openViewer(src: string, filename: string, kind: 'image' | 'video' = 'image', item: any = null) {
+  viewer.value = { src, filename, kind, item }
+}
+async function copyText(t: string, okMsg = '已复制') {
+  if (!t) { showToast('没有可复制的内容'); return }
+  try { await navigator.clipboard.writeText(t); showToast(okMsg) }
+  catch { showToast('复制失败（浏览器权限限制）') }
 }
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') { viewer.value = null; return }
