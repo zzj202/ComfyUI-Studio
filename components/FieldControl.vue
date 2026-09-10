@@ -20,6 +20,30 @@
       <input v-else type="number" :step="field.step" :value="modelValue" @input="$emit('update:modelValue', num($event))" />
     </template>
 
+    <!-- 可编辑下拉（combobox）：可手动输入任意值，也可从列表模糊筛选选择 -->
+    <template v-else-if="field.kind === 'select' && editableCombo">
+      <div class="combo">
+        <input
+          type="text"
+          :value="modelValue"
+          spellcheck="false"
+          placeholder="输入或从列表选择"
+          @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value); comboQ = ($event.target as HTMLInputElement).value; comboOpen = true"
+          @focus="comboQ = ''; comboOpen = true"
+          @blur="onComboBlur"
+        />
+        <span v-if="modelValue && !inOptions" class="combo-custom" title="手动输入的自定义值">自定义</span>
+        <ul v-if="comboOpen && comboFiltered.length" class="combo-list">
+          <li
+            v-for="opt in comboFiltered"
+            :key="opt"
+            :class="{ cur: opt === modelValue }"
+            @mousedown.prevent="$emit('update:modelValue', opt); comboOpen = false"
+          >{{ opt }}</li>
+        </ul>
+      </div>
+    </template>
+
     <select
       v-else-if="field.kind === 'select'"
       :value="modelValue"
@@ -55,6 +79,22 @@ interface FieldDef {
 }
 const props = defineProps<{ field: FieldDef; modelValue: any; hideLabel?: boolean }>()
 defineEmits<{ (e: 'update:modelValue', v: any): void }>()
+
+// ---------- 可编辑下拉（lora_name 等需要手输的字段） ----------
+const editableCombo = computed(() => props.field.name === 'lora_name')
+const comboOpen = ref(false)
+const comboQ = ref('') // 空字符串 = 展示全部；非空 = 模糊过滤
+const inOptions = computed(() => (props.field.options || []).includes(props.modelValue))
+const comboFiltered = computed(() => {
+  const opts = props.field.options || []
+  const q = comboQ.value.trim().toLowerCase()
+  if (!q) return opts
+  return opts.filter(o => o.toLowerCase().includes(q))
+})
+function onComboBlur() {
+  // mousedown.prevent 已阻止抢焦，留个小延迟兜底
+  setTimeout(() => { comboOpen.value = false }, 120)
+}
 
 function num(e: Event) {
   const v = (e.target as HTMLInputElement).value

@@ -5,8 +5,8 @@
       <div class="col col-input">
       <!-- ⓪ 工作流选择（紧凑下拉菜单） -->
       <div class="wf-bar card compact">
-        <span class="wf-sel-icon">📂</span>
-        <select class="wf-select" :value="selectedFile" @change="onWfSelect($event)">
+        <span class="wf-sel-icon">{{ wfLoading ? '⏳' : '📂' }}</span>
+        <select class="wf-select" :value="selectedFile" :disabled="wfLoading" @change="onWfSelect($event)">
           <option v-if="!workflows.length" value="">暂无工作流</option>
           <option v-for="wf in workflows" :key="wf.file" :value="wf.file" :disabled="wf.broken">
             {{ wf.name }}{{ runningOnWorkflow(wf.file) ? ' ● 进行中' : '' }}{{ wf.broken ? '（JSON 解析失败）' : '' }}
@@ -23,6 +23,26 @@
           <button class="btn primary" :class="{ flash: submitFlash }" :disabled="submitting || !canSubmit" title="快捷键：Ctrl+Enter" @click="submitBatch">▶ 开始批量生成 <kbd class="kbd-hint">Ctrl+↵</kbd></button>
         </div>
         <div v-if="progress.status === 'error'" class="status-line error" style="margin-top:8px">{{ progress.message }}</div>
+
+        <!-- 提交前预检问题清单（参考图不存在 / LoRA 不在服务器列表 / 缺必填等） -->
+        <div v-if="precheckProblems.length" class="precheck-box">
+          <div class="precheck-head">
+            <span class="precheck-icon">⚠️</span>
+            <b>提交前检查发现 {{ precheckProblems.length }} 个问题</b>
+            <span class="precheck-sub">ComfyUI 会因此拒绝执行（旧版本会误报“成功但 0 产出”）</span>
+          </div>
+          <ul class="precheck-list">
+            <li v-for="(p, i) in precheckProblems" :key="i">
+              <span class="pc-node">{{ p.title }} <em>#{{ p.node }}</em></span>
+              <span class="pc-hint">{{ p.hint }}</span>
+              <span v-if="p.value" class="pc-value">当前值：{{ p.value }}</span>
+            </li>
+          </ul>
+          <div class="precheck-actions">
+            <button class="btn" @click="precheckProblems = []">知道了，先修改</button>
+            <button class="btn ghost-danger" @click="submitBatch({ force: true })">仍要强行提交</button>
+          </div>
+        </div>
 
         <!-- 批次 / seed -->
         <div class="gen-row">
@@ -170,8 +190,15 @@
 
       <!-- ③½ 本会话批次（固定高度，最近产出上方） -->
       <div class="card batch-list-card">
-        <h2>📋 本会话批次（{{ runningCount }} 进行中 · 点击行查看结果）</h2>
-        <div v-if="!sessionBatches.length" class="empty">还没有批次，点击左侧「开始批量生成」发起</div>
+        <h2>
+          📋 本会话批次（{{ runningCount }} 进行中 · 点击行查看结果）
+          <button class="btn mini" style="margin-left:auto" title="从 ComfyUI 服务端同步批次列表（与本地合并，跨刷新/跨浏览器一致）" @click="syncBatchesNow">↻ 同步</button>
+        </h2>
+        <div v-if="!sessionBatches.length" class="empty">
+          <div class="empty-emoji">🚀</div>
+          <div class="empty-title">本会话还没有批次</div>
+          <div class="empty-hint">点击左侧「开始批量生成」发起，进度实时更新</div>
+        </div>
         <div v-else class="batch-list">
           <div
             v-for="b in sessionBatches"
@@ -198,7 +225,11 @@
           <button class="btn mini" title="快捷键：R（非输入状态）" @click="refreshHistory(true)" style="margin-left:auto">刷新 <kbd class="kbd-hint">R</kbd></button>
           <button class="btn mini danger" title="隐藏当前显示的全部历史资产（📌 固定的保留；不影响服务器上的文件）" @click="clearHistory">🧹 清空</button>
         </h2>
-        <div v-if="history.length === 0" class="empty">暂无历史产出</div>
+        <div v-if="history.length === 0" class="empty">
+          <div class="empty-emoji">🎬</div>
+          <div class="empty-title">还没有产出资产</div>
+          <div class="empty-hint">在左侧写好提示词，点击「开始批量生成」；生成完成后资产会出现在这里</div>
+        </div>
         <div v-else class="grid">
           <div v-for="item in historyView" :key="item.promptId" :class="['result-item', { pinned: isPinned(item) }]" title="右键打开操作菜单" @click.capture="markRead(item)" @contextmenu.prevent="openCtxMenu($event, item)">
             <div class="result-media">
@@ -227,7 +258,9 @@
     </main>
 
     <!-- 轻提示 -->
-    <div v-if="toast" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e2235;color:#fff;padding:10px 20px;border-radius:12px;font-size:13px;z-index:200;box-shadow:0 8px 30px rgba(0,0,0,.25);pointer-events:none">{{ toast }}</div>
+    <transition name="toast-pop">
+      <div v-if="toast" class="toast">✨ {{ toast }}</div>
+    </transition>
 
     <!-- 资产右键菜单 -->
     <div v-if="ctxMenu" style="position:fixed;inset:0;z-index:150" @click="ctxMenu = null" @contextmenu.prevent="ctxMenu = null"></div>
@@ -297,6 +330,8 @@ function fmtDur(ms?: number | null): string {
 // ===== 状态 =====
 const workflows = ref<any[]>([])
 const selectedFile = ref('')
+// 工作流图加载中：期间禁止提交，避免用上一个工作流的参数/图去生成
+const wfLoading = ref(false)
 const graph = ref<any>(null)
 const form = reactive<Record<string, any>>({})
 const advOpen = ref(false) // 高级参数默认折叠
@@ -346,11 +381,29 @@ function scheduleFormSave() {
 // 切换工作流/初次加载期间跳过持久化，避免清空覆盖已保存会话
 let restoring = false
 
-// ===== 批次列表持久化：刷新后批次展示不丢；未完成的恢复后继续轮询 =====
+// ===== 批次列表：服务端为唯一数据源（磁盘持久化，刷新/换浏览器都不丢）；localStorage 仅作离线兜底 =====
 const BATCHES_KEY = 'sessionBatches:v1'
 function saveBatches() {
+  // 服务端已持久化，这里只保留一份缓存：接口不可用时仍能展示上次拿到的列表
   try { localStorage.setItem(BATCHES_KEY, JSON.stringify(sessionBatches.value.slice(0, 30))) } catch { /* 超出配额忽略 */ }
 }
+/** 从服务端拉取批次列表（权威数据） */
+async function loadBatchesFromServer() {
+  try {
+    const res: any = await $fetch('/api/batch?limit=40', { timeout: 12000 })
+    const list: any[] = res?.batches || []
+    // 服务端返回权威列表 + 本地已选的选中态保持
+    sessionBatches.value = list
+    for (const b of list) for (const id of collectDoneIds(b)) seenDoneIds.add(id)
+    if (!selectedBatchId.value && list.length) selectedBatchId.value = list[0].id
+    saveBatches()
+    if (list.some(b => !b.finishedAt && !b.cancelled)) ensurePolling()
+    return true
+  } catch {
+    return false
+  }
+}
+/** 服务端不可用时的兜底：读本地缓存 */
 function loadPersistedBatches() {
   try {
     const arr = JSON.parse(localStorage.getItem(BATCHES_KEY) || '[]')
@@ -382,15 +435,27 @@ async function loadWorkflows() {
 }
 async function selectWorkflow(wf: any) {
   if (wf.broken) return
+  // 记录目标工作流：异步加载期间若用户又切换，则以最后一次为准（避免旧响应覆盖新选择）
+  const target = wf.file
   selectedFile.value = wf.file
   try { localStorage.setItem(WF_KEY, wf.file) } catch {}
   advOpen.value = false
+  wfLoading.value = true          // 加载中禁止提交：否则会用上一个工作流的参数提交
+  graph.value = null              // 清空旧图，防止误用
   // 不清空 sessionBatches / 不停轮询：其他工作流的批次继续在批次列表里跑
   restoring = true
   images.value = []
-  try { graph.value = await $fetch(`/api/workflows/${encodeURIComponent(wf.file)}`); initForm(); restoreImages() }
-  catch { graph.value = null }
-  finally { restoring = false; saveSession() }
+  try {
+    const g = await $fetch(`/api/workflows/${encodeURIComponent(target)}`)
+    // 用户已切到别的工作流 → 丢弃过期响应
+    if (selectedFile.value !== target) return
+    graph.value = g; initForm(); restoreImages()
+  } catch {
+    if (selectedFile.value === target) graph.value = null
+  } finally {
+    restoring = false
+    if (selectedFile.value === target) { wfLoading.value = false; saveSession() }
+  }
 }
 function restoreImages() {
   images.value = []
@@ -597,6 +662,8 @@ function swapPromptChars(group: { fields: FieldDef[] }) {
 const submitting = ref(false) // 仅在提交请求期间短暂锁定
 const sessionBatches = ref<any[]>([]) // 本会话所有批次（最新在前）
 const selectedBatchId = ref('') // 当前行选中的批次（用于「本批结果」区）
+// 提交前预检发现的问题（参考图不存在 / LoRA 不在服务器列表 / 缺必填等）
+const precheckProblems = ref<{ node: string; title: string; message: string; hint: string; value?: string }[]>([])
 const runningCount = computed(() => sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled).length)
 
 function buildBaseOverrides() {
@@ -611,28 +678,58 @@ function buildBaseOverrides() {
   return ov
 }
 
-async function submitBatch() {
+async function submitBatch(opts: { force?: boolean } = {}) {
+  const force = !!opts.force
   const valid = images.value.filter(i=>i.serverName)
   if (!valid.length) { alert('请先上传参考图'); return }
+  if (wfLoading.value) { showToast('工作流加载中，请稍候…'); return }
   if (!graph.value || submitting.value) return
 
   mgmt?.ensureAudio?.() // 用户手势期预热 AudioContext，完成音效才能正常出声
   submitting.value = true
+  // 提交瞬间锁定工作流：异步加载/切换不会影响本次提交
+  const wfAtSubmit = selectedFile.value
   // 「每批自动随机」独立控制；一次性复用种子仅作用于本批第一单
+  const payload = {
+    workflow: wfAtSubmit,
+    clientId,
+    images: valid.map(i=>i.serverName!),
+    batch: batchCount.value||1,
+    randSeed: autoRandSeed.value,
+    fixedSeed: !autoRandSeed.value ? fixedSeedVal.value : null,
+    firstSeed: pendingReuseSeed.value,
+    baseOverrides: buildBaseOverrides()
+  }
   try {
-    const res: any = await $fetch('/api/batch', {
-      method:'POST',
-      body:{
-        workflow: selectedFile.value,
-        clientId,
-        images: valid.map(i=>i.serverName!),
-        batch: batchCount.value||1,
-        randSeed: autoRandSeed.value,
-        fixedSeed: !autoRandSeed.value ? fixedSeedVal.value : null,
-        firstSeed: pendingReuseSeed.value,
-        baseOverrides: buildBaseOverrides()
+    // ① 提交前预检：先让 ComfyUI 校验图（参考图是否存在 / LoRA 是否在服务器列表 / 必填项）
+    //    避免「参数不对但被当成成功」白白跑一批空任务
+    if (!force) {
+      try {
+        const pc: any = await $fetch('/api/batch/precheck', {
+          method: 'POST',
+          body: { workflow: payload.workflow, images: payload.images, baseOverrides: payload.baseOverrides },
+          timeout: 25000
+        })
+        if (pc && pc.ok === false && (pc.problems?.length || pc.error)) {
+          precheckProblems.value = pc.problems?.length ? pc.problems : [{
+            node: '-', title: 'ComfyUI 校验失败', hint: pc.error || '服务端拒绝该工作流', value: ''
+          }]
+          progress.status = 'error'
+          progress.message = '提交前检查未通过，请先修正下方问题（或点击「仍要强行提交」）'
+          showToast('⚠️ 预检未通过，已阻止提交')
+          return
+        }
+        precheckProblems.value = []
+      } catch (pcErr: any) {
+        // 预检接口本身不可用（如 ComfyUI 离线）→ 不阻断，交给正式提交报错
+        console.warn('[precheck] 跳过：', pcErr?.message || pcErr)
       }
-    })
+    } else {
+      precheckProblems.value = []
+    }
+
+    // ② 正式提交
+    const res: any = await $fetch('/api/batch', { method:'POST', body: payload })
     pendingReuseSeed.value = null // 一次性：已消费
     progress.status = ''
     sessionBatches.value.unshift(res)
@@ -652,6 +749,11 @@ async function submitBatch() {
 function ensurePolling() {
   if (pollTimer.value) return
   pollTimer.value = setInterval(pollAll, 1500)
+}
+// 手动同步：拉一次服务端批次列表（含其他标签页/会话提交的）
+async function syncBatchesNow() {
+  const ok = await loadBatchesFromServer()
+  showToast(ok ? '已同步服务端批次列表' : '同步失败：服务端不可用')
 }
 // 提交成功 → 按钮绿色闪烁反馈（✓ 已开始生成）
 const submitFlash = ref(false)
@@ -676,23 +778,31 @@ async function pollAll() {
   pollBusy = true
   let newlyDone = false
   try {
-    for (const b of unfinished) {
-      try {
-        const info: any = await $fetch(`/api/batch/${b.id}`)
-        if (info.exists === false) { b.finishedAt = b.finishedAt || Date.now(); continue }
-        const before = collectDoneIds(b)
-        Object.assign(b, info)
-        // 新完成的单 → 立即刷新最近产出（不等整批结束）
-        for (const id of collectDoneIds(b)) {
-          if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
-        }
-      } catch { /* 网络抖动忽略 */ }
+    // 服务端批次列表为权威数据源：一次请求同步全部批次状态（顺带带回其他页面/重启前的批次）
+    const res: any = await $fetch('/api/batch?limit=40', { timeout: 15000 })
+    const list: any[] = res?.batches || []
+    const serverIds = new Set(list.map((b: any) => b.id))
+    const localSeen = new Map(sessionBatches.value.map((b: any) => [b.id, collectDoneIds(b)]))
+    for (const nb of list) {
+      const before = localSeen.get(nb.id) || new Set<string>()
+      for (const id of collectDoneIds(nb)) {
+        if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
+      }
     }
-  } finally {
-    pollBusy = false
-  }
+    // 服务端已无记录的本地批次（被清理/丢弃）→ 标记结束，避免永远转圈
+    for (const lb of sessionBatches.value) {
+      if (!serverIds.has(lb.id) && !lb.finishedAt && !lb.cancelled) lb.finishedAt = lb.finishedAt || Date.now()
+    }
+    if (list.length) {
+      // 合并：服务端列表 + 本地尚未被服务端收录的（刚提交的瞬时态）
+      const pendingLocal = sessionBatches.value.filter(b => !serverIds.has(b.id) && !b.finishedAt && !b.cancelled)
+      sessionBatches.value = [...pendingLocal, ...list]
+        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+    }
+  } catch { /* 网络抖动忽略，下一轮重试 */ }
+  finally { pollBusy = false }
   if (newlyDone) refreshHistory()
-  saveBatches() // 状态有推进就落 localStorage，刷新后批次列表不丢
+  saveBatches() // 状态有推进就落 localStorage，接口不可用时仍能展示
   // 仅当全部批次都结束时才停轮询；还有未完成的必须继续盯（否则后面的批次永远卡在排队中）
   if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) {
     stopPolling()
@@ -914,7 +1024,7 @@ if (mgmt) {
   mgmt.mgmtActions.clearBatches = clearBatches
   mgmt.mgmtActions.resetInputs = resetInputs
 }
-function clearBatches() {
+async function clearBatches() {
   const running = runningCount.value
   if (running > 0 && !confirm(`还有 ${running} 个批次进行中，清空列表后将不再显示它们的进度（服务器上仍会继续生成并出现在最近产出）。确定清空？`)) return
   sessionBatches.value = []
@@ -922,6 +1032,8 @@ function clearBatches() {
   seenDoneIds.clear()
   saveBatches()
   stopPolling()
+  // 同步清理服务端已结束的批次记录（未完成的保留，避免丢失进度）
+  try { await $fetch('/api/batch?keep=0', { method: 'DELETE', timeout: 10000 }) } catch { /* 清理失败不影响前端 */ }
 }
 function resetInputs() {
   if (!confirm('清空参考图和全部提示词输入？（seed 等参数保持不变）')) return
@@ -1153,10 +1265,12 @@ function onKeydown(e: KeyboardEvent) {
 const imageSlots = computed(() => Object.values<any>(graph.value || {}).filter(n => n?.class_type === 'LoadImage').length)
 const validImageCount = computed(() => images.value.filter(i => i.serverName).length)
 const canSubmit = computed(() => {
+  if (wfLoading.value) return false   // 工作流切换中：禁止提交，避免用旧图/旧参数生成
   if (!graph.value) return false
   return validImageCount.value > 0
 })
 const planText = computed(() => {
+  if (wfLoading.value) return '⏳ 正在加载工作流…'
   if (!graph.value) return '请先在左侧选择工作流'
   const slots = imageSlots.value
   const n = validImageCount.value
@@ -1201,10 +1315,12 @@ function loadGenSettings() {
   } catch {}
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadGenSettings()
   loadWorkflows()
-  loadPersistedBatches()
+  loadPersistedBatches()          // 先用本地缓存即时渲染（无白屏）
+  const ok = await loadBatchesFromServer() // 再以服务端为准同步（跨刷新/跨浏览器）
+  if (!ok) { /* 服务端不可用，保持本地缓存展示 */ }
   refreshHistory()
   $fetch('/api/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
   window.addEventListener('keydown', onKeydown)
@@ -1214,6 +1330,7 @@ onMounted(() => {
 function onVisibility() {
   if (document.hidden) return
   if (sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) pollAll()
+  else loadBatchesFromServer() // 前台回来时同步一次（可能在别处提交过批次）
   refreshHistory(true)
 }
 // 浏览器标签页标题反映任务进行状态（切到别的标签页也能瞄到进度）
