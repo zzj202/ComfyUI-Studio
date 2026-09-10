@@ -386,6 +386,16 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .btn.primary:hover { transform: translateY(-1.5px); box-shadow: 0 10px 24px -8px rgba(91, 95, 240, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.22); }
 .btn.primary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
 .btn.primary:disabled::after { display: none; }
+/* 提交成功反馈：变绿脉冲 + 轻微跳动 */
+.btn.primary.flash {
+  background: linear-gradient(135deg, #129e59 0%, #16b364 100%);
+  animation: submitPulse 0.6s ease-in-out 2;
+}
+.btn.primary.flash::after { display: none; }
+@keyframes submitPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(18, 158, 89, 0.55); }
+  50% { transform: scale(1.045); box-shadow: 0 0 0 10px rgba(18, 158, 89, 0); }
+}
 .btn.small { padding: 6px 12px; font-size: 12.5px; }
 .btn.mini { padding: 3px 9px; font-size: 12px; font-weight: 500; box-shadow: none; }
 .btn.mini:hover { transform: none; }
@@ -709,6 +719,22 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   transition: background 0.15s;
 }
 .lb-x:hover { background: rgba(255,255,255,.28); }
+/* 灯箱上一个/下一个导航按钮（左右居中悬浮） */
+.lb-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+  width: 44px; height: 44px; border: none; border-radius: 50%;
+  background: rgba(255,255,255,.13); color: #fff;
+  font-size: 26px; line-height: 1; cursor: pointer;
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding-bottom: 4px; /* ‹› 字形视觉居中 */
+  transition: background 0.15s, transform 0.15s;
+}
+.lb-nav:hover { background: rgba(255,255,255,.3); transform: translateY(-50%) scale(1.1); }
+.lb-nav.prev { left: 18px; }
+.lb-nav.next { right: 18px; }
+/* 灯箱位置指示：3 / 87 */
+.lb-pos { color: #9aa3b8; font-size: 11.5px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .lb-bar {
   display: flex; align-items: center; gap: 12px;
   max-width: 92vw; color: #dbe1ee; font-size: 12px;
@@ -743,7 +769,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   flex-shrink: 0;
 }
 .lb-side-meta .fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lb-side-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; flex-shrink: 0; }
+.lb-side-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 10px; flex-shrink: 0; }
 .lb-side-actions .btn { justify-content: center; padding: 6px 4px; font-size: 12px; white-space: nowrap; }
 .result-media img { cursor: zoom-in; }
 

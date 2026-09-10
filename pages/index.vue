@@ -20,7 +20,7 @@
         <!-- 生成按钮（最上面） -->
         <div class="gen-actions top">
           <span class="plan" :class="{ warn: !canSubmit }">{{ planText }}</span>
-          <button class="btn primary" :disabled="submitting || !canSubmit" title="快捷键：Ctrl+Enter" @click="submitBatch">▶ 开始批量生成 <kbd class="kbd-hint">Ctrl+↵</kbd></button>
+          <button class="btn primary" :class="{ flash: submitFlash }" :disabled="submitting || !canSubmit" title="快捷键：Ctrl+Enter" @click="submitBatch">▶ 开始批量生成 <kbd class="kbd-hint">Ctrl+↵</kbd></button>
         </div>
         <div v-if="progress.status === 'error'" class="status-line error" style="margin-top:8px">{{ progress.message }}</div>
 
@@ -43,8 +43,8 @@
             <div v-if="!autoRandSeed" class="seed-row" style="margin-top:6px">
               <input type="number" v-model.number="fixedSeedVal" placeholder="所有单复用这个 seed" />
             </div>
-            <div v-else-if="seedReuseActive" class="seed-reuse" style="margin-top:6px">
-              🌱 复用中 seed：<b>{{ fixedSeedVal }}</b>（本批结束后恢复自动随机）
+            <div v-if="pendingReuseSeed !== null" class="seed-reuse" style="margin-top:6px">
+              🌱 复用 seed：<b>{{ pendingReuseSeed }}</b>（下一批的第一单使用一次，其余单按上方设置）
             </div>
           </div>
         </div>
@@ -70,7 +70,7 @@
         <div class="card nested">
           <h2>
             🖼 参考图（{{ images.length }}）
-            <button class="btn mini" style="margin-left:auto" title="点击选择或直接拖拽一个生成产物（图片/视频）到此按钮，按文件名反查其提交参数并一键复用全部参数" @click="($refs.assetFileInput as any)?.click()" @dragover.prevent @drop.prevent="onAssetDrop">♻️ 从资产复用</button>
+            <button class="btn mini" style="margin-left:auto" title="点击选择或拖拽资产到此按钮：PNG 直接解析 ComfyUI 内嵌工作流（任意机器生成均可）；图片/视频也可按文件名反查服务器历史复用" @click="($refs.assetFileInput as any)?.click()" @dragover.prevent @drop.prevent="onAssetDrop">♻️ 从资产复用</button>
             <input ref="assetFileInput" type="file" accept="image/*,video/mp4,video/webm" hidden @change="onAssetFile" />
             <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
           </h2>
@@ -244,12 +244,15 @@
     <!-- 大图预览灯箱 -->
     <div v-if="viewer" class="lightbox" @click.self="viewer = null">
       <button class="lb-x" title="关闭" @click="viewer = null">✕</button>
+      <button v-if="viewer.item" class="lb-nav prev" title="上一个（←）" @click="navViewer(-1)">‹</button>
+      <button v-if="viewer.item" class="lb-nav next" title="下一个（→）" @click="navViewer(1)">›</button>
       <div class="lb-wrap" :class="{ 'has-side': viewer.item }">
         <div class="lb-media">
           <img v-if="viewer.kind === 'image'" :src="viewer.src" :alt="viewer.filename" />
           <video v-else :src="viewer.src" controls autoplay loop></video>
           <div class="lb-bar">
             <span class="fn">{{ viewer.item ? downloadName(viewer.item) : viewer.filename }}</span>
+            <span v-if="viewer.item" class="lb-pos">{{ viewerIndex() + 1 }} / {{ historyView.length }}</span>
             <a class="btn small" :href="viewer.src" :download="viewer.item ? downloadName(viewer.item) : viewer.filename">⬇ 下载原图</a>
           </div>
         </div>
@@ -264,6 +267,7 @@
             <button class="btn mini" :title="isPinned(viewer.item) ? '取消固定' : '固定（清空最近产出时保留）'" @click="togglePin(viewer.item)">{{ isPinned(viewer.item) ? '📌 已固定' : '📍 固定' }}</button>
             <button class="btn mini" title="重命名资产（下载文件名将使用该名称）" @click="renameAsset(viewer.item)">✏️ 重命名</button>
             <button class="btn mini" @click="copyText(midPromptOf(viewer.item), '已复制中提示词')">📋 复制</button>
+            <button class="btn mini danger" title="从最近产出中隐藏该资产（不影响服务器上的文件）" @click="deleteViewerItem()">🗑 删除</button>
           </div>
         </aside>
       </div>
@@ -304,6 +308,8 @@ const dragIdx = ref<number | null>(null)
 
 const batchCount = ref(2)
 const autoRandSeed = ref(true)
+// 一次性复用种子：资产复用时记录，下一批的第一单使用一次后自动清除；与「每批自动随机」勾选互相独立
+const pendingReuseSeed = ref<number | null>(null)
 const fixedSeedVal = ref(12345)
 
 // 视频工作流（专属 UI 分支）：多图槽位、首/中/尾分段提示词
@@ -612,8 +618,7 @@ async function submitBatch() {
 
   mgmt?.ensureAudio?.() // 用户手势期预热 AudioContext，完成音效才能正常出声
   submitting.value = true
-  // 复用中：这批固定用复用的 seed；否则按勾选的随机模式
-  const useFixed = seedReuseActive.value || !autoRandSeed.value
+  // 「每批自动随机」独立控制；一次性复用种子仅作用于本批第一单
   try {
     const res: any = await $fetch('/api/batch', {
       method:'POST',
@@ -622,16 +627,19 @@ async function submitBatch() {
         clientId,
         images: valid.map(i=>i.serverName!),
         batch: batchCount.value||1,
-        randSeed: !useFixed,
-        fixedSeed: useFixed ? fixedSeedVal.value : null,
+        randSeed: autoRandSeed.value,
+        fixedSeed: !autoRandSeed.value ? fixedSeedVal.value : null,
+        firstSeed: pendingReuseSeed.value,
         baseOverrides: buildBaseOverrides()
       }
     })
+    pendingReuseSeed.value = null // 一次性：已消费
     progress.status = ''
     sessionBatches.value.unshift(res)
     selectedBatchId.value = res.id
     saveBatches()
     ensurePolling()
+    flashSubmitBtn()
   } catch(e:any){
     progress.status='error'
     progress.message = e?.data?.message || e?.data?.error?.message || e?.message || '批量启动失败'
@@ -644,6 +652,14 @@ async function submitBatch() {
 function ensurePolling() {
   if (pollTimer.value) return
   pollTimer.value = setInterval(pollAll, 1500)
+}
+// 提交成功 → 按钮绿色闪烁反馈（✓ 已开始生成）
+const submitFlash = ref(false)
+let submitFlashTimer: any = null
+function flashSubmitBtn() {
+  submitFlash.value = true
+  if (submitFlashTimer) clearTimeout(submitFlashTimer)
+  submitFlashTimer = setTimeout(() => { submitFlash.value = false }, 1200)
 }
 // 已刷新进最近产出的 promptId，用于识别「新完成的资产」并实时刷新
 const seenDoneIds = new Set<string>()
@@ -670,7 +686,6 @@ async function pollAll() {
         for (const id of collectDoneIds(b)) {
           if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
         }
-        if (info.finishedAt) maybeRestoreSeed()
       } catch { /* 网络抖动忽略 */ }
     }
   } finally {
@@ -688,7 +703,6 @@ async function pollAll() {
 }
 function stopPolling() {
   if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
-  maybeRestoreSeed()
   refreshHistory()
 }
 async function stopBatch(id: string) {
@@ -785,6 +799,14 @@ function deleteHistoryItem(it: any) {
   saveCleared()
   history.value = history.value.filter(x => x.promptId !== it.promptId)
 }
+// 灯箱内删除：先关灯箱再删，避免 viewer 引用已移除的项
+function deleteViewerItem() {
+  if (!viewer.value?.item) return
+  const it = viewer.value.item
+  viewer.value = null
+  deleteHistoryItem(it)
+  showToast('已删除（仅从最近产出隐藏，服务器文件不受影响）')
+}
 
 // ===== 资产重命名：promptId → 自定义名称（localStorage 持久化），下载文件名随之 =====
 const RENAME_KEY = 'assetRenames:v1'
@@ -797,7 +819,16 @@ function renameAsset(item: any) {
   const name = prompt('设置资产名称（下载文件名将使用该名称，留空清除）', renames[item.promptId] || '')
   if (name === null) return
   const t = name.trim()
-  if (t) renames[item.promptId] = t
+  if (t) {
+    renames[item.promptId] = t
+    // 命名即视为重要资产：自动固定（清空最近产出时保留）
+    if (!pinIds.has(item.promptId)) {
+      pinIds.add(item.promptId)
+      savePins()
+      showToast(`已命名：${t}（并自动固定）`)
+      return
+    }
+  }
   else delete renames[item.promptId]
   saveRenames()
   if (t) showToast(`已命名：${t}`)
@@ -944,6 +975,26 @@ async function applyAssetFile(f: File) {
   if (applyingParams.value) return
   applyingParams.value = true
   try {
+    // ① PNG 内嵌元数据（ComfyUI 生成时把提交图写进 PNG tEXt 块）：任意机器生成均可解析，与服务器无关
+    if (/\.png$/i.test(f.name) || f.type === 'image/png') {
+      const g = await extractPngPromptGraph(f)
+      if (g) { await applyGraph(g); return }
+    }
+    // ② 自定义命名（下载/改名后的文件与服务器原始文件名不同）③ 当前历史文件名 ④ Comfy API 按文件名兜底
+    const base = stripQuery(f.name)
+    let promptId = ''
+    for (const [pid, name] of Object.entries(renames)) {
+      if (name && stripQuery(name) === base) { promptId = pid; break }
+    }
+    if (!promptId) {
+      const hit = history.value.find(it => it.outputs[0] && stripQuery(String(it.outputs[0].filename || '')) === base)
+      if (hit) promptId = hit.promptId
+    }
+    if (promptId) {
+      const res: any = await $fetch('/api/asset-params', { params: { promptId } })
+      await applyGraph(res?.graph)
+      return
+    }
     const res: any = await $fetch('/api/asset-params', { params: { filename: f.name } })
     await applyGraph(res?.graph)
   } catch (e: any) {
@@ -951,6 +1002,35 @@ async function applyAssetFile(f: File) {
   } finally {
     applyingParams.value = false
   }
+}
+// 解析 PNG 的 tEXt 块，取 ComfyUI 内嵌的「prompt」（API 格式提交图）——与 ComfyUI 前端拖入加载工作流同源
+async function extractPngPromptGraph(f: File): Promise<any | null> {
+  try {
+    const buf = new Uint8Array(await f.arrayBuffer())
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+    for (let i = 0; i < 8; i++) if (buf[i] !== sig[i]) return null
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+    let off = 8
+    while (off + 8 <= buf.length) {
+      const len = dv.getUint32(off)
+      const type = String.fromCharCode(buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7])
+      if (type === 'tEXt' && len > 0) {
+        const data = buf.subarray(off + 8, off + 8 + len)
+        const z = data.indexOf(0)
+        if (z > 0 && new TextDecoder('latin1').decode(data.subarray(0, z)) === 'prompt') {
+          // 正文是 UTF-8 编码的 JSON（中文提示词必须按 UTF-8 解码，latin1 会损坏）
+          try { return JSON.parse(new TextDecoder('utf-8').decode(data.subarray(z + 1))) } catch { return null }
+        }
+      }
+      if (type === 'IEND') break
+      off += 12 + len
+    }
+  } catch { /* 非 PNG 或读取失败 → 走反查链 */ }
+  return null
+}
+// 去扩展名 + 去浏览器重复下载的「 (1)」后缀，统一小写便于比对
+function stripQuery(s: string): string {
+  return s.replace(/\.[^.]+$/, '').replace(/\s*\(\d+\)$/, '').trim().toLowerCase()
 }
 
 // 核心：应用一份提交时的工作流图
@@ -984,11 +1064,11 @@ async function applyGraph(g: any) {
     form[f.uid] = v
     n++
   }
-  // ③ seed 进入「复用中」：本批固定该 seed，本会话批次全部结束后自动恢复随机
+  // ③ seed 复用：记为一次性种子（下一批的第一单使用一次），不动「每批自动随机」勾选
   const sf = seedField.value
   if (sf) {
     const sv = g?.[sf.nodeId]?.inputs?.[sf.name]
-    if (typeof sv === 'number') { fixedSeedVal.value = sv; seedReuseActive.value = true; n++ }
+    if (typeof sv === 'number') { fixedSeedVal.value = sv; pendingReuseSeed.value = sv; n++ }
   }
   // ④ 还原参考图：LoadImage 按标题自然排序（与后端槽位顺序一致），src 走 /api/view 代理
   const loadNodes = Object.entries<any>(g)
@@ -1007,12 +1087,6 @@ async function applyGraph(g: any) {
   saveSession()
   showToast(`✅ 已复用该资产全部参数：${n} 项参数${restored.length ? ` + ${restored.length} 张参考图` : ''}`)
 }
-// 复用中状态：批次全部结束后恢复随机
-const seedReuseActive = ref(false)
-function maybeRestoreSeed() {
-  const hasUnfinished = sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)
-  if (!hasUnfinished) seedReuseActive.value = false
-}
 
 // ===== 大图预览 =====
 // 网格视频悬停即播（静音循环），移开暂停复位——快速扫览对比挑选
@@ -1029,6 +1103,22 @@ const viewer = ref<{ src: string; filename: string; kind: 'image' | 'video'; ite
 function openViewer(src: string, filename: string, kind: 'image' | 'video' = 'image', item: any = null) {
   viewer.value = { src, filename, kind, item }
 }
+// 灯箱导航：在最近产出列表（与卡片显示同序）中翻上一个/下一个
+function viewerIndex(): number {
+  if (!viewer.value?.item) return -1
+  return historyView.value.findIndex(it => it.promptId === viewer.value!.item.promptId)
+}
+function navViewer(dir: 1 | -1) {
+  const arr = historyView.value
+  if (!arr.length) return
+  let i = viewerIndex()
+  if (i === -1) i = dir === 1 ? -1 : 0
+  const next = arr[(i + dir + arr.length) % arr.length]
+  const out = next.outputs[0]
+  if (!out) return
+  markRead(next)
+  viewer.value = { src: mediaUrl(out), filename: out.filename, kind: out.kind, item: next }
+}
 async function copyText(t: string, okMsg = '已复制') {
   if (!t) { showToast('没有可复制的内容'); return }
   try { await navigator.clipboard.writeText(t); showToast(okMsg) }
@@ -1036,6 +1126,12 @@ async function copyText(t: string, okMsg = '已复制') {
 }
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') { viewer.value = null; return }
+  // 灯箱打开时：←/→ 翻上一个/下一个资产
+  if (viewer.value?.item && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault()
+    navViewer(e.key === 'ArrowRight' ? 1 : -1)
+    return
+  }
   // Ctrl/Cmd+Enter：开始批量生成（提示词输入框内也可触发）
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()

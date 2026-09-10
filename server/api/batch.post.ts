@@ -10,6 +10,8 @@ export default defineEventHandler(async (event) => {
   const batch = Math.max(1, Math.floor(Number(body?.batch) || 1))
   const randSeed = body?.randSeed !== false
   const fixedSeed = body?.fixedSeed != null ? Number(body?.fixedSeed) : null
+  // 一次性种子：仅该批第一单使用（资产复用场景），其余单按 randSeed 正常随机
+  const firstSeed = body?.firstSeed != null ? Number(body?.firstSeed) : null
   const clientId = String(body?.clientId || '')
   const baseOverrides: Record<string, Record<string, any>> = body?.baseOverrides || {}
 
@@ -56,6 +58,7 @@ export default defineEventHandler(async (event) => {
     batch,
     randSeed,
     fixedSeed,
+    firstSeed,
     seedNodeId,
     seedKey,
     clientId

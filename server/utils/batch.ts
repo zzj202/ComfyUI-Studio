@@ -148,6 +148,7 @@ export interface CreateBatchInput {
   batch: number
   randSeed: boolean
   fixedSeed: number | null
+  firstSeed: number | null // 一次性：仅第一单用这个 seed（资产复用），其余单按 randSeed
   seedNodeId: string | null
   seedKey: string | null
   clientId: string
@@ -173,6 +174,10 @@ export function createBatch(input: CreateBatchInput) {
   planItems(job)
   if (!job.randSeed) {
     for (const it of job.items) it.seed = input.fixedSeed ?? null
+  }
+  // 一次性复用种子：仅覆盖第一单（randSeed 模式下其余单仍随机）
+  if (input.firstSeed != null && Number.isFinite(input.firstSeed) && job.items[0]) {
+    job.items[0].seed = input.firstSeed
   }
   jobs.set(job.id, job)
   persistJob(job)
