@@ -73,3 +73,35 @@ export function normalizeOutputs(historyEntry: any) {
   }
   return outputs
 }
+
+/**
+ * 把 ComfyUI 的 node_errors 翻译成用户能看懂的中文原因（并带上出错的字段值）
+ *
+ * 背景（关键陷阱）：ComfyUI 在参数校验失败时（参考图不存在 / 取值不在列表 / 缺必填）
+ * 依然会返回 prompt_id，只判断有无 prompt_id 会把它当成成功 → 任务秒完但零产出。
+ * 所以提交侧必须显式检查 node_errors 并用本函数给出可读原因。
+ */
+export function formatNodeErrors(nodeErrors: Record<string, any>, graph: any): string {
+  const parts: string[] = []
+  for (const [nid, info] of Object.entries<any>(nodeErrors)) {
+    const ct = info?.class_type || graph?.[nid]?.class_type || `节点 ${nid}`
+    const title = graph?.[nid]?._meta?.title || ct
+    for (const err of info?.errors || []) {
+      const msg = String(err?.message || '')
+      const detail = String(err?.details || '')
+      const inputName = err?.extra_info?.input_name || ''
+      let hint = ''
+      // 常见错误类型 → 可操作提示
+      if (/Invalid image file/i.test(detail)) {
+        hint = '⚠ 参考图在 ComfyUI 服务器上不存在（可能换过服务器/图未上传）→ 请重新上传参考图'
+      } else if (/value_not_in_list/i.test(err?.type || '')) {
+        const val = graph?.[nid]?.inputs?.[inputName]
+        hint = `⚠ 取值不在服务器的可选项中${inputName ? `（字段 ${inputName}${val ? ` = ${val}` : ''}）` : ''} → 请用下拉列表重新选择（如 LoRA / 模型 / 采样器文件名）`
+      } else if (/required input is missing/i.test(detail + msg)) {
+        hint = `⚠ 缺少必填输入${inputName ? `（${inputName}）` : ''}`
+      }
+      parts.push(`[${title}] ${detail || msg}${hint ? `\n    ${hint}` : ''}`)
+    }
+  }
+  return parts.join('\n') || '节点校验失败'
+}

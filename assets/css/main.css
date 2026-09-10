@@ -318,12 +318,6 @@ body {
   overflow: hidden;
 }
 .col-output .card { flex-shrink: 0; margin-bottom: 16px; }
-.col-output .card.batch-result-card {
-  max-height: 45%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 .col-output .card.history-card {
   flex: 1;
   min-height: 0;
@@ -333,24 +327,19 @@ body {
   overflow: hidden;
 }
 .history-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; grid-auto-rows: 214px; } /* media158 + foot（行高必须显式，见塌陷注释） */
-.batch-result-card .grid { flex: 1; min-height: 0; overflow-y: auto; padding-right: 6px; grid-auto-rows: 200px; } /* media158 + foot（行高必须显式，见塌陷注释） */
 .history-card .empty { flex-shrink: 0; }
 
 /* 细滚动条 */
 .col-input::-webkit-scrollbar,
-.history-card .grid::-webkit-scrollbar,
-.batch-result-card .grid::-webkit-scrollbar { width: 7px; }
+.history-card .grid::-webkit-scrollbar { width: 7px; }
 .col-input::-webkit-scrollbar-track,
-.history-card .grid::-webkit-scrollbar-track,
-.batch-result-card .grid::-webkit-scrollbar-track { background: transparent; }
+.history-card .grid::-webkit-scrollbar-track { background: transparent; }
 .col-input::-webkit-scrollbar-thumb,
-.history-card .grid::-webkit-scrollbar-thumb,
-.batch-result-card .grid::-webkit-scrollbar-thumb {
+.history-card .grid::-webkit-scrollbar-thumb {
   background: rgba(103, 113, 138, 0.28); border-radius: 999px;
 }
 .col-input::-webkit-scrollbar-thumb:hover,
-.history-card .grid::-webkit-scrollbar-thumb:hover,
-.batch-result-card .grid::-webkit-scrollbar-thumb:hover { background: rgba(103, 113, 138, 0.5); }
+.history-card .grid::-webkit-scrollbar-thumb:hover { background: rgba(103, 113, 138, 0.5); }
 
 /* ---------- 卡片 ---------- */
 .card {
@@ -613,7 +602,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 }
 .batch-row {
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 10px 13px; margin-bottom: 8px; cursor: pointer;
+  padding: 10px 13px; margin-bottom: 8px;
   transition: all 0.16s; background: #fdfdff;
 }
 .batch-row:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
@@ -623,14 +612,50 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 }
 .batch-row.done { opacity: 0.72; }
 .batch-row.cancelled { opacity: 0.45; }
+/* 运行中的任务行：左侧强调条 + 轻微高亮 */
+.batch-row.running {
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft), #fdfdff 40%);
+}
 .batch-row-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
 .batch-row-head .batch-wf {
   font-weight: 650; font-size: 13px; max-width: 220px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.batch-row-head .batch-info { flex: 1; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.batch-row-head .batch-info { flex: 1; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .batch-tag { font-size: 12px; color: var(--muted); font-weight: 650; }
 .batch-tag.ok { color: var(--green); }
+
+/* ---------- ComfyUI 原生队列：状态标签 / 计数徽标 / 不定进度 ---------- */
+.q-tag {
+  flex-shrink: 0; font-size: 11.5px; font-weight: 700;
+  padding: 3px 8px; border-radius: 999px; letter-spacing: 0.02em;
+}
+.q-tag.running {
+  color: #fff; background: linear-gradient(135deg, var(--accent), #7c7ff5);
+  box-shadow: 0 3px 10px -4px rgba(91, 95, 240, 0.75);
+  animation: q-pulse 1.6s ease-in-out infinite;
+}
+.q-tag.pending { color: var(--muted); background: rgba(103, 113, 138, 0.13); }
+@keyframes q-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+.q-badge {
+  font-size: 11.5px; font-weight: 650; color: var(--accent);
+  background: var(--accent-soft); padding: 3px 9px; border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+/* 运行中任务无法预知完成度 → 不定式进度条（往复滑动） */
+.progress-track.indeterminate { overflow: hidden; }
+.progress-track.indeterminate .progress-bar {
+  width: 38%;
+  animation: q-slide 1.35s cubic-bezier(.55,.08,.42,.94) infinite;
+}
+@keyframes q-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
 
 /* ---------- 结果图墙 ---------- */
 .grid {
@@ -1022,7 +1047,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 /* ---------- 响应式回退 ---------- */
 @media (max-width: 1000px) {
   .cols { grid-template-columns: 1fr; }
-  .col-input, .history-card .grid, .batch-result-card .grid { overflow-y: visible; }
+  .col-input, .history-card .grid { overflow-y: visible; }
   body { overflow: auto; }
   .app { height: auto; overflow: visible; }
 }

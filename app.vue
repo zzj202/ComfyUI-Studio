@@ -58,7 +58,7 @@
           </transition>
         </div>
         <button class="btn small" :title="soundEnabled ? '批次完成提示音：已开启，点击关闭' : '批次完成提示音：已关闭，点击开启'" @click="toggleSound">{{ soundEnabled ? '🔔 音效开' : '🔕 音效关' }}</button>
-        <button v-if="mgmtActions.clearBatches" class="btn small" title="收起下方本会话批次列表（不影响服务器上正在进行的生成）" @click="mgmtActions.clearBatches()">🗑 清空批次列表</button>
+        <button v-if="mgmtActions.clearBatches" class="btn small" title="清空 ComfyUI 队列里的排队任务（正在运行的任务会被中止，需二次确认）" @click="mgmtActions.clearBatches()">🗑 清空 ComfyUI 队列</button>
         <button v-if="mgmtActions.resetInputs" class="btn small" title="清空参考图与全部提示词输入" @click="mgmtActions.resetInputs()">♻️ 重置输入区</button>
         <a v-if="sys?.base" class="btn small" :href="sys.base" target="_blank" title="在新标签页打开 ComfyUI 原生界面">🖥 ComfyUI</a>
         <button class="btn small" @click="openSettings">⚙ 连接设置</button>
@@ -366,7 +366,7 @@ async function saveSettings() {
 }
 
 // ---------- 管理菜单栏：音效 + 页面级动作注册表 ----------
-// 音效引擎在全局壳层（页面切换不丢状态）；页面动作（清空历史/批次/输入区）由 index.vue 注册进来
+// 音效引擎在全局壳层（页面切换不丢状态）；页面动作（清空历史/队列/输入区）由 index.vue 注册进来
 const SOUND_KEY = 'soundEnabled:v1'
 const soundEnabled = ref((() => { try { return JSON.parse(localStorage.getItem(SOUND_KEY) || 'null') ?? true } catch { return true } })())
 let audioCtx: AudioContext | null = null

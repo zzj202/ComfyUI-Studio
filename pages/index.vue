@@ -12,7 +12,7 @@
             {{ wf.name }}{{ runningOnWorkflow(wf.file) ? ' ● 进行中' : '' }}{{ wf.broken ? '（JSON 解析失败）' : '' }}
           </option>
         </select>
-        <span v-if="runningCount" class="wf-running" title="有批次正在生成">● {{ runningCount }} 进行中</span>
+        <span v-if="queueTaskCount" class="wf-running" title="ComfyUI 队列中有任务正在生成">● {{ queueTaskCount }} 进行中</span>
       </div>
 
       <!-- ① 生成控制 & 提示词 & 参考图 & 参数 -->
@@ -169,51 +169,40 @@
 
       <!-- 右栏：产出 -->
       <div class="col col-output">
-      <!-- ③ 本批结果 -->
-      <div class="card batch-result-card" v-if="batchDoneOutputs.length">
-        <h2>✨ 本次批量结果（{{ batchDoneOutputs.length }}）</h2>
-        <div class="grid">
-          <div v-for="(r, i) in batchDoneOutputs" :key="i" class="result-item">
-            <div class="result-media">
-              <img v-if="r.kind === 'image'" :src="r.src" loading="lazy" @click="openViewer(r.src, r.filename, 'image')" />
-              <video v-else-if="r.kind === 'video'" :src="r.src" muted loop playsinline preload="metadata" @mouseenter="hoverPlay" @mouseleave="hoverPause" @click="openViewer(r.src, r.filename, 'video')" />
-              <div v-else class="muted" style="padding:12px">不支持预览</div>
-            </div>
-            <div class="result-foot">
-              <span class="fn" :title="r.filename">{{ r.filename }}</span>
-              <span v-if="fmtDur(r.durationMs)" class="time-chip" title="该单生成耗时">⏱ {{ fmtDur(r.durationMs) }}</span>
-              <a class="btn mini" :href="r.src" :download="r.filename">下载</a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ③½ 本会话批次（固定高度，最近产出上方） -->
+      <!-- ③ ComfyUI 原生任务队列（运行中 / 排队中） -->
       <div class="card batch-list-card">
         <h2>
-          📋 本会话批次（{{ runningCount }} 进行中 · 点击行查看结果）
-          <button class="btn mini" style="margin-left:auto" title="从 ComfyUI 服务端同步批次列表（与本地合并，跨刷新/跨浏览器一致）" @click="syncBatchesNow">↻ 同步</button>
+          🖥 ComfyUI 任务队列
+          <span v-if="liveRunning || livePending" class="q-badge">{{ liveRunning }} 运行 · {{ livePending }} 排队</span>
+          <button class="btn mini" style="margin-left:auto" :disabled="queueRefreshing" title="立即从 ComfyUI /queue 拉取最新队列" @click="refreshQueueNow">{{ queueRefreshing ? '⏳' : '↻' }} 刷新</button>
         </h2>
-        <div v-if="!sessionBatches.length" class="empty">
-          <div class="empty-emoji">🚀</div>
-          <div class="empty-title">本会话还没有批次</div>
-          <div class="empty-hint">点击左侧「开始批量生成」发起，进度实时更新</div>
+        <div v-if="!queueLive" class="empty">
+          <div class="empty-emoji">🔌</div>
+          <div class="empty-title">无法连接 ComfyUI 队列</div>
+          <div class="empty-hint">{{ queueError || '请确认 ComfyUI 服务在线' }}</div>
+        </div>
+        <div v-else-if="!liveRunning && !livePending" class="empty">
+          <div class="empty-emoji">💤</div>
+          <div class="empty-title">队列空闲</div>
+          <div class="empty-hint">点击左侧「开始批量生成」提交任务，进度实时来自 ComfyUI 原生队列</div>
         </div>
         <div v-else class="batch-list">
-          <div
-            v-for="b in sessionBatches"
-            :key="b.id"
-            class="batch-row"
-            :class="{ sel: b.id === selectedBatchId, done: !!b.finishedAt && !b.cancelled, cancelled: b.cancelled }"
-            @click="selectedBatchId = b.id"
-          >
+          <div v-for="t in liveRunning" :key="'r' + t.promptId" class="batch-row running">
             <div class="batch-row-head">
-              <span class="batch-wf">{{ shortWf(b.workflow) }}</span>
-              <span class="batch-info">{{ batchTextOf(b) }}</span>
-              <button v-if="!b.finishedAt && !b.cancelled" class="btn mini danger" @click.stop="stopBatch(b.id)">⏹ 停止</button>
-              <span v-else class="batch-tag" :class="{ ok: !!b.finishedAt && !b.cancelled }">{{ b.cancelled ? '已停止' : '完成' }}</span>
+              <span class="q-tag running">▶ 运行中</span>
+              <span class="batch-wf">{{ shortWf(t.workflow) }}</span>
+              <span class="batch-info">{{ taskTextOf(t, 'running') }}</span>
+              <button class="btn mini danger" @click.stop="cancelTask(t)">⏹ 取消</button>
             </div>
-            <div class="progress-track"><div class="progress-bar" :style="{ width: percentOf(b) + '%' }"></div></div>
+            <div class="progress-track indeterminate"><div class="progress-bar"></div></div>
+          </div>
+          <div v-for="(t, i) in livePending" :key="'p' + t.promptId" class="batch-row">
+            <div class="batch-row-head">
+              <span class="q-tag pending">#{{ i + 1 }} 排队</span>
+              <span class="batch-wf">{{ shortWf(t.workflow) }}</span>
+              <span class="batch-info">{{ taskTextOf(t, 'pending') }}</span>
+              <button class="btn mini danger" @click.stop="cancelTask(t)">✕ 移除</button>
+            </div>
           </div>
         </div>
       </div>
@@ -354,7 +343,6 @@ const history = ref<any[]>([])
 const SAMPLERS = ['euler','euler_ancestral','heun','dpm_2','dpm_2_ancestral','lms','dpm_fast','dpm_adaptive','dpmpp_2s_ancestral','dpmpp_sde','dpmpp_2m','dpmpp_2m_sde','dpmpp_3m_sde','ddim','uni_pc','uni_pc_bh2','lcm','ddpm']
 const SCHEDULERS = ['normal','karras','exponential','sgm_uniform','simple','ddim_uniform','beta','linear_quadratic','kl_optimal']
 const clientId = Math.random().toString(36).slice(2) + Date.now().toString(36)
-const pollTimer = ref<any>(null)
 
 // ===== 会话持久化（刷新保留图片与提示词，按工作流隔离）=====
 const SESSION_KEY = 'wfSession:v1'
@@ -380,41 +368,6 @@ function scheduleFormSave() {
 }
 // 切换工作流/初次加载期间跳过持久化，避免清空覆盖已保存会话
 let restoring = false
-
-// ===== 批次列表：服务端为唯一数据源（磁盘持久化，刷新/换浏览器都不丢）；localStorage 仅作离线兜底 =====
-const BATCHES_KEY = 'sessionBatches:v1'
-function saveBatches() {
-  // 服务端已持久化，这里只保留一份缓存：接口不可用时仍能展示上次拿到的列表
-  try { localStorage.setItem(BATCHES_KEY, JSON.stringify(sessionBatches.value.slice(0, 30))) } catch { /* 超出配额忽略 */ }
-}
-/** 从服务端拉取批次列表（权威数据） */
-async function loadBatchesFromServer() {
-  try {
-    const res: any = await $fetch('/api/batch?limit=40', { timeout: 12000 })
-    const list: any[] = res?.batches || []
-    // 服务端返回权威列表 + 本地已选的选中态保持
-    sessionBatches.value = list
-    for (const b of list) for (const id of collectDoneIds(b)) seenDoneIds.add(id)
-    if (!selectedBatchId.value && list.length) selectedBatchId.value = list[0].id
-    saveBatches()
-    if (list.some(b => !b.finishedAt && !b.cancelled)) ensurePolling()
-    return true
-  } catch {
-    return false
-  }
-}
-/** 服务端不可用时的兜底：读本地缓存 */
-function loadPersistedBatches() {
-  try {
-    const arr = JSON.parse(localStorage.getItem(BATCHES_KEY) || '[]')
-    if (!Array.isArray(arr) || !arr.length) return
-    sessionBatches.value = arr
-    // 已完成的单记入 seenDoneIds，恢复时不算「新完成」
-    for (const b of arr) for (const id of collectDoneIds(b)) seenDoneIds.add(id)
-    // 有未完成的批次 → 恢复轮询（服务端链条独立运行，会继续推进）
-    if (arr.some((b: any) => !b.finishedAt && !b.cancelled)) ensurePolling()
-  } catch { /* 损坏忽略 */ }
-}
 
 // ===== 工作流 =====
 const WF_KEY = 'selectedWorkflow:v1'
@@ -442,7 +395,7 @@ async function selectWorkflow(wf: any) {
   advOpen.value = false
   wfLoading.value = true          // 加载中禁止提交：否则会用上一个工作流的参数提交
   graph.value = null              // 清空旧图，防止误用
-  // 不清空 sessionBatches / 不停轮询：其他工作流的批次继续在批次列表里跑
+  // 队列巡检不停：ComfyUI 原生队列里有其他工作流的任务也照常显示
   restoring = true
   images.value = []
   try {
@@ -658,13 +611,21 @@ function swapPromptChars(group: { fields: FieldDef[] }) {
   toast.value = '已交换：小金毛 ↔ 小白'
 }
 
-// ===== 批量生成（支持连续提交多批，互不阻塞）=====
+// ===== 批量生成：状态由 ComfyUI 原生队列托管，平台不维护批次状态机 =====
 const submitting = ref(false) // 仅在提交请求期间短暂锁定
-const sessionBatches = ref<any[]>([]) // 本会话所有批次（最新在前）
-const selectedBatchId = ref('') // 当前行选中的批次（用于「本批结果」区）
 // 提交前预检发现的问题（参考图不存在 / LoRA 不在服务器列表 / 缺必填等）
 const precheckProblems = ref<{ node: string; title: string; message: string; hint: string; value?: string }[]>([])
-const runningCount = computed(() => sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled).length)
+// —— ComfyUI 原生任务视图（/api/comfy/tasks → /queue + /history 聚合）——
+const queueLive = ref(true)          // ComfyUI 队列是否可达
+const queueError = ref('')           // 不可达原因
+const queueRefreshing = ref(false)   // 手动刷新中
+const liveRunning = ref<any[]>([])   // 运行中任务（原生 /queue 的 queue_running）
+const livePending = ref<any[]>([])   // 排队中任务（原生 /queue 的 queue_pending）
+const queueTaskCount = computed(() => liveRunning.value.length + livePending.value.length)
+// 已处理过的完成 promptId：用于识别「新完成」→ 刷新最近产出 + 播放完成音效
+const seenDoneIds = new Set<string>()
+let sweepBusy = false
+let queueTimer: any = null
 
 function buildBaseOverrides() {
   const ov: Record<string,Record<string,any>> = {}
@@ -728,14 +689,23 @@ async function submitBatch(opts: { force?: boolean } = {}) {
       precheckProblems.value = []
     }
 
-    // ② 正式提交
+    // ② 直接投递到 ComfyUI 原生队列（平台只管提交，不再接管状态）
     const res: any = await $fetch('/api/batch', { method:'POST', body: payload })
     pendingReuseSeed.value = null // 一次性：已消费
     progress.status = ''
-    sessionBatches.value.unshift(res)
-    selectedBatchId.value = res.id
-    saveBatches()
-    ensurePolling()
+    const n = res?.submitted || 0
+    progress.message = res?.failed
+      ? `已提交 ${n} 个任务，${res.failed} 个被拒绝：${res.errors?.[0]?.error || ''}`
+      : ''
+    if (res?.failed) {
+      progress.status = 'error'
+      showToast(`⚠️ ${n} 个已入队，${res.failed} 个被 ComfyUI 拒绝`)
+    } else {
+      showToast(`✅ 已提交 ${n} 个任务到 ComfyUI 队列`)
+    }
+    // 立即拉一次队列 + 启动巡检
+    await sweepQueue()
+    ensureQueueSweep()
     flashSubmitBtn()
   } catch(e:any){
     progress.status='error'
@@ -745,15 +715,68 @@ async function submitBatch(opts: { force?: boolean } = {}) {
   }
 }
 
-// 全局轮询：同时盯住所有未完成批次
-function ensurePolling() {
-  if (pollTimer.value) return
-  pollTimer.value = setInterval(pollAll, 1500)
+// ===== ComfyUI 原生队列巡检 =====
+// 单一数据源：/api/comfy/tasks 聚合了 ComfyUI 的 /queue（运行中+排队中）与 /history（已完成）。
+// 有任务在跑时 1.5s 一次；空闲时降到 5s 轻量轮询，保证别处提交的任务也能被发现。
+let idleStreak = 0
+async function sweepQueue() {
+  if (sweepBusy) return
+  sweepBusy = true
+  try {
+    const res: any = await $fetch('/api/comfy/tasks?limit=40', { timeout: 15000 })
+    queueLive.value = res?.ok !== false
+    queueError.value = res?.error || ''
+    liveRunning.value = res?.running || []
+    livePending.value = res?.pending || []
+    // 识别「新完成」的产出 → 刷新最近产出；由「有任务」转为「全空」时播完成音效
+    let newlyDone = false
+    for (const t of (res?.completed || [])) {
+      if (!seenDoneIds.has(t.promptId)) { seenDoneIds.add(t.promptId); newlyDone = true }
+    }
+    if (newlyDone) refreshHistory()
+    const wasBusy = idleStreak === 0
+    if (queueTaskCount.value > 0) {
+      idleStreak = 0
+    } else {
+      idleStreak++
+      if (wasBusy && idleStreak === 1) {
+        // 队列刚清空 → 生成完成提示音（loud：重复 3 遍，确保能及时发现）
+        if (soundEnabled.value) playChime(true)
+        else console.info('[chime] 队列已清空，但音效开关为关，跳过播放')
+      }
+    }
+  } catch {
+    queueLive.value = false
+    queueError.value = '请求失败（dev server 或 ComfyUI 不可达）'
+  } finally { sweepBusy = false }
 }
-// 手动同步：拉一次服务端批次列表（含其他标签页/会话提交的）
-async function syncBatchesNow() {
-  const ok = await loadBatchesFromServer()
-  showToast(ok ? '已同步服务端批次列表' : '同步失败：服务端不可用')
+/** 有任务 → 1.5s；空闲 → 8s（省资源，同时保证别处提交的任务能被及时看到） */
+function ensureQueueSweep() {
+  const base = queueTaskCount.value > 0 ? 1500 : 8000
+  if (queueTimer.value) {
+    if (queueTimer.value.__ms === base) return
+    clearInterval(queueTimer.value)
+  }
+  const id: any = setInterval(() => { sweepQueue() }, base)
+  id.__ms = base
+  queueTimer.value = id
+}
+async function refreshQueueNow() {
+  if (queueRefreshing.value) return
+  queueRefreshing.value = true
+  await sweepQueue()
+  queueRefreshing.value = false
+  showToast(queueLive.value ? '已从 ComfyUI 队列同步' : '同步失败：ComfyUI 不可达')
+}
+/** 取消/移除任务：ComfyUI 原生 POST /queue {delete:[promptId]}（运行中与排队中都适用） */
+async function cancelTask(t: any) {
+  try {
+    await $fetch('/api/comfy/queue', { method: 'DELETE', body: { promptId: t.promptId }, timeout: 10000 })
+    showToast('已从 ComfyUI 队列移除该任务')
+  } catch (e: any) {
+    showToast(e?.data?.message || '移除失败（任务可能已开始执行）')
+  }
+  await sweepQueue()
 }
 // 提交成功 → 按钮绿色闪烁反馈（✓ 已开始生成）
 const submitFlash = ref(false)
@@ -763,95 +786,21 @@ function flashSubmitBtn() {
   if (submitFlashTimer) clearTimeout(submitFlashTimer)
   submitFlashTimer = setTimeout(() => { submitFlash.value = false }, 1200)
 }
-// 已刷新进最近产出的 promptId，用于识别「新完成的资产」并实时刷新
-const seenDoneIds = new Set<string>()
-function collectDoneIds(b: any): Set<string> {
-  const s = new Set<string>()
-  for (const it of (b?.items || [])) if (it.status === 'done' && it.promptId) s.add(it.promptId)
-  return s
-}
-let pollBusy = false // 上一轮未返回时跳过本轮，避免请求堆积（ComfyUI 忙时 1.5s 间隔可能不够）
-async function pollAll() {
-  if (pollBusy) return
-  const unfinished = sessionBatches.value.filter(b => !b.finishedAt && !b.cancelled)
-  if (!unfinished.length) { stopPolling(); return }
-  pollBusy = true
-  let newlyDone = false
-  try {
-    // 服务端批次列表为权威数据源：一次请求同步全部批次状态（顺带带回其他页面/重启前的批次）
-    const res: any = await $fetch('/api/batch?limit=40', { timeout: 15000 })
-    const list: any[] = res?.batches || []
-    const serverIds = new Set(list.map((b: any) => b.id))
-    const localSeen = new Map(sessionBatches.value.map((b: any) => [b.id, collectDoneIds(b)]))
-    for (const nb of list) {
-      const before = localSeen.get(nb.id) || new Set<string>()
-      for (const id of collectDoneIds(nb)) {
-        if (!before.has(id) && !seenDoneIds.has(id)) { seenDoneIds.add(id); newlyDone = true }
-      }
-    }
-    // 服务端已无记录的本地批次（被清理/丢弃）→ 标记结束，避免永远转圈
-    for (const lb of sessionBatches.value) {
-      if (!serverIds.has(lb.id) && !lb.finishedAt && !lb.cancelled) lb.finishedAt = lb.finishedAt || Date.now()
-    }
-    if (list.length) {
-      // 合并：服务端列表 + 本地尚未被服务端收录的（刚提交的瞬时态）
-      const pendingLocal = sessionBatches.value.filter(b => !serverIds.has(b.id) && !b.finishedAt && !b.cancelled)
-      sessionBatches.value = [...pendingLocal, ...list]
-        .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
-    }
-  } catch { /* 网络抖动忽略，下一轮重试 */ }
-  finally { pollBusy = false }
-  if (newlyDone) refreshHistory()
-  saveBatches() // 状态有推进就落 localStorage，接口不可用时仍能展示
-  // 仅当全部批次都结束时才停轮询；还有未完成的必须继续盯（否则后面的批次永远卡在排队中）
-  if (!sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) {
-    stopPolling()
-    // 本会话全部批次完成 → 播放提示音（loud：重复 3 遍，确保能及时发现）
-    if (soundEnabled.value) playChime(true)
-    else console.info('[chime] 全部批次已完成，但音效开关为关，跳过播放')
-  }
-}
-function stopPolling() {
-  if (pollTimer.value) { clearInterval(pollTimer.value); pollTimer.value = null }
-  refreshHistory()
-}
-async function stopBatch(id: string) {
-  try { await $fetch(`/api/batch/${id}`, { method: 'DELETE' }) } catch {}
-  const b = sessionBatches.value.find(x => x.id === id)
-  if (b) b.cancelled = true
-  refreshHistory()
-}
 
 // ===== 派生 =====
 const progress = reactive<{status:string; message:string}>({status:'', message:''})
-const activeBatch = computed(() => sessionBatches.value.find(b => b.id === selectedBatchId.value) || null)
-// 每行批次的状态文案 / 进度 / 工作流短名
+// 工作流短名 / 任务行文案
 function shortWf(file: string) {
-  return String(file || '').replace(/\.json$/i, '')
+  return String(file || '').replace(/\.json$/i, '') || '未知工作流'
 }
-function batchTextOf(b: any): string {
-  const r = b?.items || []
-  if (!b.finishedAt && !b.cancelled && !b.loopStarted) return `排队中 · 共 ${r.length} 单`
-  const done = r.filter((i:any)=>i.status==='done').length
-  const err = r.filter((i:any)=>i.status==='error').length
-  const run = r.filter((i:any)=>i.status==='running').length
-  return `${done}/${r.length}${run ? ` · ${run} 进行中` : ''}${err ? ` · ${err} 失败` : ''}`
+function taskTextOf(t: any, kind: 'running' | 'pending'): string {
+  const bits: string[] = []
+  if (t.images?.length) bits.push(`🖼 ${t.images.map((s: string) => s.split('/').pop()).join(' + ')}`)
+  if (t.seed != null) bits.push(`🌱 ${t.seed}`)
+  if (kind === 'running') bits.push(`${t.nodeCount} 节点`)
+  bits.push(`${t.promptId.slice(0, 8)}…`)
+  return bits.join(' · ')
 }
-function percentOf(b: any): number {
-  const r = b?.items || []
-  if (!r.length) return 0
-  const done = r.filter((i:any)=>i.status==='done').length
-  return Math.round(done / r.length * 100)
-}
-const batchDoneOutputs = computed<Out[]>(()=>{
-  const list:Out[]=[]
-  for (const item of (activeBatch.value?.items||[])) {
-    if (item.status==='done') for (const o of item.outputs||[]) {
-      list.push({ ...o, src: mediaUrl(o), durationMs: item.durationMs })
-    }
-  }
-  return list
-})
 
 // ===== 历史 =====
 // 已清空的历史记录（promptId 集合），刷新后仍保持隐藏；新产出 id 不同不受影响
@@ -1024,16 +973,22 @@ if (mgmt) {
   mgmt.mgmtActions.clearBatches = clearBatches
   mgmt.mgmtActions.resetInputs = resetInputs
 }
+// 「清空队列」：直接调用 ComfyUI 原生队列清空（排队中；运行中的需另行确认）
 async function clearBatches() {
-  const running = runningCount.value
-  if (running > 0 && !confirm(`还有 ${running} 个批次进行中，清空列表后将不再显示它们的进度（服务器上仍会继续生成并出现在最近产出）。确定清空？`)) return
-  sessionBatches.value = []
-  selectedBatchId.value = ''
-  seenDoneIds.clear()
-  saveBatches()
-  stopPolling()
-  // 同步清理服务端已结束的批次记录（未完成的保留，避免丢失进度）
-  try { await $fetch('/api/batch?keep=0', { method: 'DELETE', timeout: 10000 }) } catch { /* 清理失败不影响前端 */ }
+  const run = liveRunning.value.length
+  const pend = livePending.value.length
+  if (!run && !pend) { showToast('ComfyUI 队列已是空的'); return }
+  const msg = run
+    ? `ComfyUI 队列中有 ${run} 个正在运行、${pend} 个排队中。\n\n确定清空？正在运行的任务会被中止。`
+    : `ComfyUI 队列中有 ${pend} 个排队任务，确定全部清空？`
+  if (!confirm(msg)) return
+  try {
+    await $fetch('/api/comfy/queue', { method: 'POST', body: { pending: true, running: run > 0 }, timeout: 15000 })
+    showToast(run ? '已清空 ComfyUI 队列（含中止运行中的任务）' : '已清空 ComfyUI 排队任务')
+  } catch (e: any) {
+    showToast(e?.data?.message || '清空队列失败')
+  }
+  await sweepQueue()
 }
 function resetInputs() {
   if (!confirm('清空参考图和全部提示词输入？（seed 等参数保持不变）')) return
@@ -1291,8 +1246,9 @@ function mediaUrl(r:any, bust=false) {
   if (bust) q.append('cache','0')
   return `/api/view?${q.toString()}`
 }
+// 下拉框里标注「该工作流有任务在跑」——依据 ComfyUI 原生队列里任务快照的工作流名
 function runningOnWorkflow(file:string){
-  return sessionBatches.value.some(b => b.workflow === file && !b.finishedAt && !b.cancelled)
+  return [...liveRunning.value, ...livePending.value].some(t => t.workflow === file)
 }
 
 // ===== 启动 =====
@@ -1318,9 +1274,8 @@ function loadGenSettings() {
 onMounted(async () => {
   loadGenSettings()
   loadWorkflows()
-  loadPersistedBatches()          // 先用本地缓存即时渲染（无白屏）
-  const ok = await loadBatchesFromServer() // 再以服务端为准同步（跨刷新/跨浏览器）
-  if (!ok) { /* 服务端不可用，保持本地缓存展示 */ }
+  sweepQueue()        // 队列/历史统一来自 ComfyUI 原生 API，首次即拉
+  ensureQueueSweep()
   refreshHistory()
   $fetch('/api/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
   window.addEventListener('keydown', onKeydown)
@@ -1329,15 +1284,14 @@ onMounted(async () => {
 })
 function onVisibility() {
   if (document.hidden) return
-  if (sessionBatches.value.some(b => !b.finishedAt && !b.cancelled)) pollAll()
-  else loadBatchesFromServer() // 前台回来时同步一次（可能在别处提交过批次）
+  sweepQueue()
   refreshHistory(true)
 }
-// 浏览器标签页标题反映任务进行状态（切到别的标签页也能瞄到进度）
-watch(runningCount, (n) => {
-  // 归零时有真正跑完（非全部手动取消）的批次 → 标题标记完成，方便切走时发现
-  const allDone = n === 0 && sessionBatches.value.some(b => b.finishedAt && !b.cancelled)
-  document.title = n > 0 ? `▶ ${n} 个批次进行中 · ComfyUI Studio` : (allDone ? '✅ 全部完成 · ComfyUI Studio' : 'ComfyUI Studio')
+// 浏览器标签页标题反映 ComfyUI 队列状态（切到别的标签页也能瞄到进度）
+watch(queueTaskCount, (n) => {
+  // 归零时若本会话提交过任务 → 标记完成，方便切走时发现
+  const allDone = n === 0 && seenDoneIds.size > 0
+  document.title = n > 0 ? `▶ ${n} 个任务进行中 · ComfyUI Studio` : (allDone ? '✅ 全部完成 · ComfyUI Studio' : 'ComfyUI Studio')
 }, { immediate: true })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
