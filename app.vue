@@ -58,10 +58,18 @@
           </transition>
         </div>
         <button class="btn small" :title="soundEnabled ? '批次完成提示音：已开启，点击关闭' : '批次完成提示音：已关闭，点击开启'" @click="toggleSound">{{ soundEnabled ? '🔔 音效开' : '🔕 音效关' }}</button>
-        <button v-if="mgmtActions.clearBatches" class="btn small" title="清空 ComfyUI 队列里的排队任务（正在运行的任务会被中止，需二次确认）" @click="mgmtActions.clearBatches()">🗑 清空 ComfyUI 队列</button>
-        <button v-if="mgmtActions.resetInputs" class="btn small" title="清空参考图与全部提示词输入" @click="mgmtActions.resetInputs()">♻️ 重置输入区</button>
-        <a v-if="sys?.base" class="btn small" :href="sys.base" target="_blank" title="在新标签页打开 ComfyUI 原生界面">🖥 ComfyUI</a>
-        <button class="btn small" @click="openSettings">⚙ 连接设置</button>
+        <!-- 低频操作收进「更多」菜单，保持顶栏清爽 -->
+        <div class="more-wrap" ref="moreWrap">
+          <button class="btn small more-btn-round" title="更多操作：打开 ComfyUI / 清空队列 / 重置输入 / 连接设置" @click="moreOpen = !moreOpen">⋯</button>
+          <transition name="pop">
+            <div v-if="moreOpen" class="more-menu" @click.stop>
+              <a v-if="sys?.base" class="more-item" :href="sys.base" target="_blank" title="在新标签页打开 ComfyUI 原生界面">🖥 打开 ComfyUI 原生界面</a>
+              <button v-if="mgmtActions.clearBatches" class="more-item" title="清空 ComfyUI 队列里的排队任务（正在运行的任务会被中止，需二次确认）" @click="mgmtActions.clearBatches(); moreOpen = false">🗑 清空 ComfyUI 队列</button>
+              <button v-if="mgmtActions.resetInputs" class="more-item" title="清空参考图与全部提示词输入" @click="mgmtActions.resetInputs(); moreOpen = false">♻️ 重置输入区</button>
+              <button class="more-item" @click="moreOpen = false; openSettings()">⚙ 连接设置…</button>
+            </div>
+          </transition>
+        </div>
       </div>
     </header>
 
@@ -178,6 +186,9 @@ const sys = ref<any>(null)
 const sysOpen = ref(false)
 const sysWrap = ref<HTMLElement | null>(null)
 const interrupting = ref(false)
+// 「更多」菜单
+const moreOpen = ref(false)
+const moreWrap = ref<HTMLElement | null>(null)
 
 const sysClass = computed(() => (sys.value?.ok === true ? 'ok' : sys.value?.ok === false ? 'bad' : 'unknown'))
 // GPU 名称压缩：cuda:0 NVIDIA GeForce RTX 5090 : cudaMallocAsync → RTX 5090
@@ -312,7 +323,9 @@ async function clearServerHistory() {
 }
 
 function onDocClick(e: MouseEvent) {
-  if (sysOpen.value && sysWrap.value && !sysWrap.value.contains(e.target as Node)) sysOpen.value = false
+  const t = e.target as Node
+  if (sysOpen.value && sysWrap.value && !sysWrap.value.contains(t)) sysOpen.value = false
+  if (moreOpen.value && moreWrap.value && !moreWrap.value.contains(t)) moreOpen.value = false
 }
 
 onMounted(() => {

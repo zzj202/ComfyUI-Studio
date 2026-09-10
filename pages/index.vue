@@ -173,7 +173,7 @@
       <div class="card batch-list-card">
         <h2>
           🖥 ComfyUI 任务队列
-          <span v-if="liveRunning || livePending" class="q-badge">{{ liveRunning }} 运行 · {{ livePending }} 排队</span>
+          <span v-if="liveRunning.length || livePending.length" class="q-badge">{{ liveRunning.length }} 运行 · {{ livePending.length }} 排队</span>
           <button class="btn mini" style="margin-left:auto" :disabled="queueRefreshing" title="立即从 ComfyUI /queue 拉取最新队列" @click="refreshQueueNow">{{ queueRefreshing ? '⏳' : '↻' }} 刷新</button>
         </h2>
         <div v-if="!queueLive" class="empty">
@@ -181,7 +181,7 @@
           <div class="empty-title">无法连接 ComfyUI 队列</div>
           <div class="empty-hint">{{ queueError || '请确认 ComfyUI 服务在线' }}</div>
         </div>
-        <div v-else-if="!liveRunning && !livePending" class="empty">
+        <div v-else-if="!liveRunning.length && !livePending.length" class="empty">
           <div class="empty-emoji">💤</div>
           <div class="empty-title">队列空闲</div>
           <div class="empty-hint">点击左侧「开始批量生成」提交任务，进度实时来自 ComfyUI 原生队列</div>
@@ -190,7 +190,7 @@
           <div v-for="t in liveRunning" :key="'r' + t.promptId" class="batch-row running">
             <div class="batch-row-head">
               <span class="q-tag running">▶ 运行中</span>
-              <span class="batch-wf">{{ shortWf(t.workflow) }}</span>
+              <span class="batch-wf" :title="t.workflow ? shortWf(t.workflow) : t.summary">{{ shortWf(t.workflow) === '未知工作流' ? '正在生成视频/图片' : shortWf(t.workflow) }}</span>
               <span class="batch-info">{{ taskTextOf(t, 'running') }}</span>
               <button class="btn mini danger" @click.stop="cancelTask(t)">⏹ 取消</button>
             </div>
@@ -199,7 +199,7 @@
           <div v-for="(t, i) in livePending" :key="'p' + t.promptId" class="batch-row">
             <div class="batch-row-head">
               <span class="q-tag pending">#{{ i + 1 }} 排队</span>
-              <span class="batch-wf">{{ shortWf(t.workflow) }}</span>
+              <span class="batch-wf" :title="t.workflow ? shortWf(t.workflow) : t.summary">{{ shortWf(t.workflow) === '未知工作流' ? '等待生成' : shortWf(t.workflow) }}</span>
               <span class="batch-info">{{ taskTextOf(t, 'pending') }}</span>
               <button class="btn mini danger" @click.stop="cancelTask(t)">✕ 移除</button>
             </div>
@@ -799,7 +799,6 @@ function taskTextOf(t: any, kind: 'running' | 'pending'): string {
   if (t.images?.length) bits.push(`🖼 ${t.images.map((s: string) => s.split('/').pop()).join(' + ')}`)
   if (t.seed != null) bits.push(`🌱 ${t.seed}`)
   if (kind === 'running') bits.push(`${t.nodeCount} 节点`)
-  bits.push(`${t.promptId.slice(0, 8)}…`)
   return bits.join(' · ')
 }
 
@@ -835,7 +834,7 @@ async function flushHistory() {
   histDirty = false
   try {
     // max=100：窗口要足够大，避免新产出把旧产出挤出窗口导致「看起来没更新」
-    const res: any = await $fetch('/api/history?max=100', { timeout: 12000 })
+    const res: any = await $fetch('/api/comfy/history?max=100', { timeout: 12000 })
     history.value = (res.items || []).filter((it: any) => !clearedIds.has(it.promptId))
     // 首次使用（无已读记录）：把当前已有资产全部标为已读，之后的新产出才显示未读
     if (!readSeeded) { readSeeded = true; for (const it of history.value) readIds.add(it.promptId); saveRead() }
@@ -1278,7 +1277,7 @@ onMounted(async () => {
   sweepQueue()        // 队列/历史统一来自 ComfyUI 原生 API，首次即拉
   ensureQueueSweep()
   refreshHistory()
-  $fetch('/api/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
+  $fetch('/api/comfy/loras').then((r: any) => { loraOptions.value = r?.loras || [] }).catch(() => {})
   window.addEventListener('keydown', onKeydown)
   // 后台标签页的定时器会被浏览器节流，切回前台时立即补一次状态+历史刷新
   document.addEventListener('visibilitychange', onVisibility)
