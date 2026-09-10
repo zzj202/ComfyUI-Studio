@@ -752,7 +752,7 @@ watch(queueTaskCount, (n, o) => {
     }
     if (soundEnabled.value) {
       console.info('[chime] 全部任务完成 → 播放完成音效')
-      playChime(true)
+      mgmt?.playChime?.(true) // 音效引擎在全局壳层 app.vue，必须经 mgmt 注入调用（裸调会 ReferenceError）
       showToast('✅ 全部任务完成')
     } else {
       console.info('[chime] 全部任务完成，但音效开关为关，跳过播放')
