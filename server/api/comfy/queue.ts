@@ -34,12 +34,15 @@ export default defineEventHandler(async (event) => {
     const clearPending = body?.pending !== false
     const clearRunning = body?.running === true
     try {
-      const qs = new URLSearchParams()
-      if (clearPending) qs.set('clear', 'true')
-      if (clearRunning) qs.set('running', 'true')
-      if (clearRunning) qs.set('clear', 'true')
-      await $fetch(`${base}/queue?${qs.toString()}`, { method: 'POST', timeout: 10000 })
-      return { ok: true, message: clearRunning ? '已清空队列（含正在运行的任务会被中止）' : '已清空排队中的任务' }
+      // ComfyUI 的 /queue POST 只认 JSON body（{clear:true} 清排队；查询参数形式会 500）
+      if (clearRunning) {
+        // 运行中的任务要靠 /interrupt 中止（clear 只清排队）
+        await $fetch(`${base}/interrupt`, { method: 'POST', timeout: 10000 }).catch(() => {})
+      }
+      if (clearPending) {
+        await $fetch(`${base}/queue`, { method: 'POST', body: { clear: true }, timeout: 10000 })
+      }
+      return { ok: true, message: clearRunning ? '已中止运行中任务并清空排队' : '已清空排队中的任务' }
     } catch (e: any) {
       throw createError({ statusCode: 502, message: `清空队列失败: ${e?.message || e}` })
     }
