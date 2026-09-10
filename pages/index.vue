@@ -626,6 +626,7 @@ const queueTaskCount = computed(() => liveRunning.value.length + livePending.val
 const seenDoneIds = new Set<string>()
 let sweepBusy = false
 let queueTimer: any = null
+let queueTimerMs = 0 // 当前巡检间隔（定时器 id 在浏览器是数字，不能挂属性）
 
 function buildBaseOverrides() {
   const ov: Record<string,Record<string,any>> = {}
@@ -753,13 +754,13 @@ async function sweepQueue() {
 /** 有任务 → 1.5s；空闲 → 8s（省资源，同时保证别处提交的任务能被及时看到） */
 function ensureQueueSweep() {
   const base = queueTaskCount.value > 0 ? 1500 : 8000
-  if (queueTimer.value) {
-    if (queueTimer.value.__ms === base) return
-    clearInterval(queueTimer.value)
+  if (queueTimer) {
+    if (queueTimerMs === base) return
+    clearInterval(queueTimer)
+    queueTimer = null
   }
-  const id: any = setInterval(() => { sweepQueue() }, base)
-  id.__ms = base
-  queueTimer.value = id
+  queueTimer = setInterval(() => { sweepQueue() }, base)
+  queueTimerMs = base
 }
 async function refreshQueueNow() {
   if (queueRefreshing.value) return
@@ -1296,5 +1297,6 @@ watch(queueTaskCount, (n) => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   document.removeEventListener('visibilitychange', onVisibility)
+  if (queueTimer) { clearInterval(queueTimer); queueTimer = null }
 })
 </script>
