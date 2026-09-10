@@ -105,3 +105,34 @@ export function formatNodeErrors(nodeErrors: Record<string, any>, graph: any): s
   }
   return parts.join('\n') || '节点校验失败'
 }
+
+// ---------- /object_info 缓存 ----------
+// 背景：/object_info 是几 MB 的大 JSON，预检每次全量拉取要数秒 → 提交按钮被
+// submitting 锁住很久，操作者体感「点一次要等很久才能再点」。
+// 节点定义几乎不变 → 缓存 10 分钟；但 LoadImage 的图片列表会随上传变化 →
+// 单独提供 getLoadImageList() 每次现拉（单节点响应很小），上传成功后也会失效缓存。
+
+let oiCache: { data: Record<string, any>; at: number } | null = null
+const OI_TTL_MS = 10 * 60 * 1000
+
+export async function getObjectInfo(): Promise<Record<string, any>> {
+  if (oiCache && Date.now() - oiCache.at < OI_TTL_MS) return oiCache.data
+  const data = await $fetch<Record<string, any>>(`${comfyBase()}/object_info`, { timeout: 25000 })
+  oiCache = { data, at: Date.now() }
+  return data
+}
+
+export function invalidateObjectInfo() {
+  oiCache = null
+}
+
+/** LoadImage 的服务器图片列表：每次现拉（上传后立即可用，且响应小、快） */
+export async function getLoadImageList(): Promise<string[]> {
+  try {
+    const def: any = await $fetch(`${comfyBase()}/object_info/LoadImage`, { timeout: 10000 })
+    const list = def?.LoadImage?.input?.required?.image?.[0]
+    return Array.isArray(list) ? list.map(String) : []
+  } catch {
+    return [] // 拉不到就不做图片存在性校验，避免误报
+  }
+}

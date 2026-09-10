@@ -5,7 +5,7 @@
 // 每次正常提交前都会泄漏 1 个真任务（批次 2 实际入队 3 个）。
 // 故改为本地校验：/object_info 拿到每个节点的输入定义，逐项检查
 // （节点类型存在 / 必填输入齐全 / 下拉取值在列表内 / 数值范围 / 参考图在服务器文件列表中）。
-import { comfyBase, readWorkflowFile } from '../../utils/comfy'
+import { readWorkflowFile, getObjectInfo, getLoadImageList } from '../../utils/comfy'
 
 /** object_info 中标记为 hidden 的特殊输入类型，不参与校验，避免误报 */
 const HIDDEN_TYPES = new Set([
@@ -49,14 +49,15 @@ export default defineEventHandler(async (event) => {
     for (const nid of unused) delete graph[nid]
   }
 
-  // 拉取节点定义（object_info），做本地校验——不发任何会入队的请求
-  const base = comfyBase()
+  // 节点定义走缓存（首次约 1-3s，之后毫秒级）→ 提交按钮不再被预检拖住数秒
   let oi: Record<string, any>
   try {
-    oi = await $fetch(`${base}/object_info`, { timeout: 25000 })
+    oi = await getObjectInfo()
   } catch (e: any) {
     return { ok: false, error: `无法获取 ComfyUI 节点定义：${e?.message || e}`, problems: [] }
   }
+  // LoadImage 的图片列表每次现拉：新上传的参考图立刻能通过预检（10 分钟缓存里还没有它）
+  const freshImageList = await getLoadImageList()
 
   const problems: { node: string; title: string; message: string; hint: string; value?: string }[] = []
   const push = (nid: string, node: any, message: string, hint: string, value?: string) => {
@@ -97,9 +98,10 @@ export default defineEventHandler(async (event) => {
 
       // 下拉列表校验（LoRA 名、模型名、参考图文件名等都属于 combo）
       if (Array.isArray(spec?.[0]) && typeof v === 'string' && !Array.isArray(v)) {
-        const list: string[] = spec[0].map(String)
+        const isImage = ct === 'LoadImage' && name === 'image'
+        // 参考图列表用现拉的（缓存里没有新上传的图）；现拉失败则退回缓存列表
+        const list: string[] = isImage && freshImageList.length ? freshImageList : spec[0].map(String)
         if (!list.includes(v)) {
-          const isImage = ct === 'LoadImage' && name === 'image'
           push(
             nid, node,
             isImage ? `参考图 "${v}" 不在服务器文件列表中` : `${name} 取值 "${v}" 不在服务器可选项中`,

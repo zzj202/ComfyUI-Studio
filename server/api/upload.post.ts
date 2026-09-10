@@ -17,6 +17,7 @@ export default defineEventHandler(async (event) => {
       timeout: 60000
     })
     // ComfyUI 返回 { name, subfolder, type }
+    invalidateObjectInfo() // 新图已进服务器列表，缓存里的旧列表不再可信
     return { name: res?.name, subfolder: res?.subfolder || '', type: res?.type || 'input' }
   } catch (e: any) {
     throw createError({ statusCode: 502, message: `上传到 ComfyUI 失败: ${e?.message || e}` })
