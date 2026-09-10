@@ -769,13 +769,13 @@ async function refreshQueueNow() {
   queueRefreshing.value = false
   showToast(queueLive.value ? '已从 ComfyUI 队列同步' : '同步失败：ComfyUI 不可达')
 }
-/** 取消/移除任务：ComfyUI 原生 POST /queue {delete:[promptId]}（运行中与排队中都适用） */
+/** 取消/移除任务：运行中 → ComfyUI /interrupt 中止；排队中 → /queue {delete}（由服务端区分） */
 async function cancelTask(t: any) {
   try {
-    await $fetch('/api/comfy/queue', { method: 'DELETE', body: { promptId: t.promptId }, timeout: 10000 })
-    showToast('已从 ComfyUI 队列移除该任务')
+    const res: any = await $fetch('/api/comfy/queue', { method: 'DELETE', body: { promptId: t.promptId }, timeout: 15000 })
+    showToast(res?.message || '已取消该任务')
   } catch (e: any) {
-    showToast(e?.data?.message || '移除失败（任务可能已开始执行）')
+    showToast(e?.data?.message || '取消失败（任务可能刚执行完毕）')
   }
   await sweepQueue()
 }
@@ -1202,6 +1202,7 @@ function onKeydown(e: KeyboardEvent) {
   // Ctrl/Cmd+Enter：开始批量生成（提示词输入框内也可触发）
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()
+    if (e.repeat) return // 按住不放产生的 repeat 事件不触发，防止重复提交
     if (!submitting.value && canSubmit.value) submitBatch()
     return
   }

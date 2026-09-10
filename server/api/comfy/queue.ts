@@ -53,6 +53,14 @@ export default defineEventHandler(async (event) => {
     const promptId = String(body?.promptId || '')
     if (!promptId) throw createError({ statusCode: 400, message: '缺少 promptId' })
     try {
+      // 关键：ComfyUI 的 {delete:[id]} 只对排队中任务有效，运行中任务会被静默忽略。
+      // 运行中的必须走 /interrupt 中止，先查一次队列区分两者。
+      const q: any = await $fetch(`${base}/queue`, { timeout: 10000 }).catch(() => null)
+      const isRunning = Array.isArray(q?.queue_running) && q.queue_running.some((it: any) => it?.[1] === promptId)
+      if (isRunning) {
+        await $fetch(`${base}/interrupt`, { method: 'POST', timeout: 10000 })
+        return { ok: true, message: '已中止运行中的任务' }
+      }
       await $fetch(`${base}/queue`, { method: 'POST', body: { delete: [promptId] }, timeout: 10000 })
       return { ok: true, message: '已从队列移除该任务' }
     } catch (e: any) {
