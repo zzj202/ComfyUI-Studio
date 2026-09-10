@@ -436,12 +436,18 @@ function playChime(loud = false) {
     ensureAudio()
     if (!audioCtx) { console.warn('[chime] WebAudio 不可用 → 后备提示音'); fallbackBeep(loud); return }
     if (audioCtx.state !== 'running') {
-      // AudioContext 恢复是异步的：等 resume 成功后再补播；恢复失败退回后备提示音
+      // AudioContext 恢复是异步的：等 resume 成功后再补播；恢复失败/挂起都退回后备提示音
       const ctx = audioCtx
-      ctx.resume?.().then(() => {
+      let handled = false
+      const settle = () => {
+        if (handled) return
+        handled = true
         if (ctx.state === 'running') chime(loud)
         else { console.warn('[chime] AudioContext 恢复失败(state=' + ctx.state + ') → 后备提示音'); fallbackBeep(loud) }
-      }).catch(() => { console.warn('[chime] AudioContext resume 异常 → 后备提示音'); fallbackBeep(loud) })
+      }
+      ctx.resume?.().then(settle).catch(() => { console.warn('[chime] AudioContext resume 异常 → 后备提示音'); fallbackBeep(loud) })
+      // 兜底：resume 被浏览器静默挂起时 promise 永不 resolve → 800ms 后强制走后备，避免彻底无声
+      setTimeout(settle, 800)
       return
     }
     chime(loud)

@@ -718,8 +718,7 @@ async function submitBatch(opts: { force?: boolean } = {}) {
 
 // ===== ComfyUI 原生队列巡检 =====
 // 单一数据源：/api/comfy/tasks 聚合了 ComfyUI 的 /queue（运行中+排队中）与 /history（已完成）。
-// 有任务在跑时 1.5s 一次；空闲时降到 5s 轻量轮询，保证别处提交的任务也能被发现。
-let idleStreak = 0
+// 有任务在跑时 1.5s 一次；空闲时降到 8s 轻量轮询，保证别处提交的任务也能被发现。
 async function sweepQueue() {
   if (sweepBusy) return
   sweepBusy = true
@@ -729,28 +728,37 @@ async function sweepQueue() {
     queueError.value = res?.error || ''
     liveRunning.value = res?.running || []
     livePending.value = res?.pending || []
-    // 识别「新完成」的产出 → 刷新最近产出；由「有任务」转为「全空」时播完成音效
+    // 识别「新完成」的产出 → 刷新最近产出（完成音效由下方 watch(queueTaskCount) 触发，不在这里判）
     let newlyDone = false
     for (const t of (res?.completed || [])) {
       if (!seenDoneIds.has(t.promptId)) { seenDoneIds.add(t.promptId); newlyDone = true }
     }
     if (newlyDone) refreshHistory()
-    const wasBusy = idleStreak === 0
-    if (queueTaskCount.value > 0) {
-      idleStreak = 0
-    } else {
-      idleStreak++
-      if (wasBusy && idleStreak === 1) {
-        // 队列刚清空 → 生成完成提示音（loud：重复 3 遍，确保能及时发现）
-        if (soundEnabled.value) playChime(true)
-        else console.info('[chime] 队列已清空，但音效开关为关，跳过播放')
-      }
-    }
   } catch {
     queueLive.value = false
     queueError.value = '请求失败（dev server 或 ComfyUI 不可达）'
   } finally { sweepBusy = false }
 }
+
+// 全部任务完成的音效触发：watch「运行中+排队中」从 >0 → 0 的瞬间（比轮询内部计数更可靠）。
+// 手动清空队列 / 取消最后一个任务导致的清零不算「完成」，用 suppressChimeOnce 跳过一次。
+let suppressChimeOnce = false
+watch(queueTaskCount, (n, o) => {
+  if (n === 0 && (o || 0) > 0) {
+    if (suppressChimeOnce) {
+      suppressChimeOnce = false
+      console.info('[chime] 队列清零来自手动清空/取消，跳过完成音效')
+      return
+    }
+    if (soundEnabled.value) {
+      console.info('[chime] 全部任务完成 → 播放完成音效')
+      playChime(true)
+      showToast('✅ 全部任务完成')
+    } else {
+      console.info('[chime] 全部任务完成，但音效开关为关，跳过播放')
+    }
+  }
+})
 /** 有任务 → 1.5s；空闲 → 8s（省资源，同时保证别处提交的任务能被及时看到） */
 function ensureQueueSweep() {
   const base = queueTaskCount.value > 0 ? 1500 : 8000
@@ -771,10 +779,15 @@ async function refreshQueueNow() {
 }
 /** 取消/移除任务：运行中 → ComfyUI /interrupt 中止；排队中 → /queue {delete}（由服务端区分） */
 async function cancelTask(t: any) {
+  // 只有取消的是最后一个任务时，队列才会清零——这时标记跳过完成音效；
+  // 取消多个中的其一不会清零，标记不应残留（否则会吞掉之后真正的完成音效）
+  const wasLast = queueTaskCount.value === 1
+  if (wasLast) suppressChimeOnce = true
   try {
     const res: any = await $fetch('/api/comfy/queue', { method: 'DELETE', body: { promptId: t.promptId }, timeout: 15000 })
     showToast(res?.message || '已取消该任务')
   } catch (e: any) {
+    if (wasLast) suppressChimeOnce = false
     showToast(e?.data?.message || '取消失败（任务可能刚执行完毕）')
   }
   await sweepQueue()
@@ -982,10 +995,12 @@ async function clearBatches() {
     ? `ComfyUI 队列中有 ${run} 个正在运行、${pend} 个排队中。\n\n确定清空？正在运行的任务会被中止。`
     : `ComfyUI 队列中有 ${pend} 个排队任务，确定全部清空？`
   if (!confirm(msg)) return
+  suppressChimeOnce = true // 手动清空 ≠ 全部完成，跳过完成音效
   try {
     await $fetch('/api/comfy/queue', { method: 'POST', body: { pending: true, running: run > 0 }, timeout: 15000 })
     showToast(run ? '已清空 ComfyUI 队列（含中止运行中的任务）' : '已清空 ComfyUI 排队任务')
   } catch (e: any) {
+    suppressChimeOnce = false // 清空失败，队列没清零，恢复下次正常触发
     showToast(e?.data?.message || '清空队列失败')
   }
   await sweepQueue()
