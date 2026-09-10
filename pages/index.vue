@@ -92,8 +92,31 @@
             🖼 参考图（{{ images.length }}）
             <button class="btn mini" style="margin-left:auto" title="点击选择或拖拽资产到此按钮：PNG 直接解析 ComfyUI 内嵌工作流（任意机器生成均可）；图片/视频也可按文件名反查服务器历史复用" @click="($refs.assetFileInput as any)?.click()" @dragover.prevent @drop.prevent="onAssetDrop">♻️ 从资产复用</button>
             <input ref="assetFileInput" type="file" accept="image/*,video/mp4,video/webm" hidden @change="onAssetFile" />
-            <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
+              <button v-if="images.length" class="btn mini danger" @click="clearImages">清空</button>
           </h2>
+          <!-- 常用参考图库：拖缩略图到下方上传框即可使用，也可点击快速加入 -->
+          <div class="ref-strip">
+            <div class="ref-strip-title">⭐ 常用参考图
+              <button class="btn mini" style="margin-left:auto" title="把常用参考图存进本地图库（data/refs），随时拖拽复用" @click="($refs.refFileInput as any)?.click()">＋ 添加</button>
+              <input ref="refFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden @change="onRefPick" />
+            </div>
+            <div v-if="!refLib.length" class="ref-empty">库里还没有常用图 —— 点「＋ 添加」上传，或点已上传参考图右下角的 ⭐ 收进库里</div>
+            <div v-else class="ref-list">
+              <div
+                v-for="r in refLib"
+                :key="r.name"
+                class="ref-thumb"
+                draggable="true"
+                :title="`${r.name} · 拖到下方上传框，或点击直接加入参考图`"
+                @dragstart="onRefDragStart(r, $event)"
+                @click="addRef(r.name)"
+              >
+                <img :src="r.url" :alt="r.name" loading="lazy" />
+                <span class="ref-name">{{ r.name }}</span>
+                <button class="ref-x" title="从图库移除" @click.stop="delRef(r.name)">✕</button>
+              </div>
+            </div>
+          </div>
           <div v-if="!selectedFile" class="empty">↑ 先在上方选择一个工作流</div>
           <template v-else>
             <div
@@ -134,6 +157,7 @@
                   <img :src="img.src" alt="参考图" loading="lazy" />
                   <span v-if="uploadingId === img.id" class="img-uploading">上传中…</span>
                   <button class="img-x" title="移除" @click.stop="removeImage(idx)">✕</button>
+                  <button v-if="img.file" class="img-star" title="收进常用参考图库，下次直接拖拽复用" @click.stop="saveRefs([img.file])">⭐</button>
                   <span v-if="batchIndex.includes(idx)" class="img-idx" :title="slotBadgeTitle(idx)">{{ slotBadge(idx) }}</span>
                 </div>
                 <div class="img-name" :title="img.name">{{ img.name }}</div>
@@ -299,7 +323,7 @@
 
 <script setup lang="ts">
 // ===== 类型 =====
-interface QueuedImg { id: string; name: string; src: string; serverName?: string }
+interface QueuedImg { id: string; name: string; src: string; serverName?: string; file?: File }
 interface FieldDef {
   uid: string; nodeId: string; name: string; label: string
   kind: 'textarea' | 'number' | 'select' | 'bool' | 'text'
@@ -527,6 +551,9 @@ async function onPickFiles(e: Event) {
 }
 async function onDrop(e: DragEvent) {
   dragging.value = false
+  // 来自「常用参考图」条的拖拽：dataTransfer 里带的是图库名字而非文件
+  const refName = e.dataTransfer?.getData('application/x-ref-name')
+  if (refName) { await addRef(refName); return }
   const files = Array.from(e.dataTransfer?.files || [])
   await uploadFiles(files)
 }
@@ -536,7 +563,7 @@ async function uploadFiles(files: File[]) {
   const sorted: QueuedImg[] = []
   for (const file of imgs) {
     const id = Date.now().toString(36)+Math.random().toString(36).slice(2,6)
-    sorted.push({ id, name: file.name, src: await makeObjUrl(file) })
+    sorted.push({ id, name: file.name, src: await makeObjUrl(file), file })
   }
   // 上传到 ComfyUI 拿 serverName
   for (const q of sorted) {
@@ -564,6 +591,53 @@ function dropAt(targetIdx: number) {
   arr.splice(targetIdx,0,m)
   images.value = arr
   dragIdx.value = null
+}
+
+// ===== 常用参考图库（data/refs）：存常用图，拖拽/点击即可加入参考图 =====
+interface RefItem { name: string; size: number; mtime: number; url: string }
+const refLib = ref<RefItem[]>([])
+async function loadRefs() {
+  try { const r: any = await $fetch('/api/refs'); refLib.value = r?.refs || [] } catch {}
+}
+/** 拖拽开始：把图库文件名塞进 dataTransfer（落点 onDrop 识别后走 addRef） */
+function onRefDragStart(r: RefItem, e: DragEvent) {
+  e.dataTransfer?.setData('application/x-ref-name', r.name)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'
+}
+/** 从图库取原图 → 复用现有上传管线（拿 serverName 后加入参考图） */
+async function fetchRefAsFile(name: string): Promise<File | null> {
+  try {
+    const blob = await $fetch<Blob>(`/api/refs/${encodeURIComponent(name)}`, { responseType: 'blob' })
+    return new File([blob], name, { type: blob.type || 'image/png' })
+  } catch { return null }
+}
+async function addRef(name: string) {
+  const f = await fetchRefAsFile(name)
+  if (!f) { showToast('读取常用参考图失败'); return }
+  await uploadFiles([f])
+}
+async function onRefPick(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  await saveRefs(files)
+}
+/** 保存进图库：拖入的文件 / 已上传参考图的 ⭐ 收藏都走这里 */
+async function saveRefs(files: File[]) {
+  const imgs = files.filter(f => f.type.startsWith('image/'))
+  if (!imgs.length) return
+  const fd = new FormData()
+  for (const f of imgs) fd.append('files', f, f.name)
+  try {
+    const res: any = await $fetch('/api/refs', { method: 'POST', body: fd })
+    showToast(res?.errors?.length ? `已存 ${res.saved?.length ?? 0} 张，${res.errors[0]}` : `已存入 ${res?.saved?.length ?? 0} 张常用参考图`)
+    await loadRefs()
+  } catch (err: any) { showToast(err?.data?.message || '保存常用参考图失败') }
+}
+async function delRef(name: string) {
+  if (!confirm(`从常用参考图库移除「${name}」？（只是移出图库，已加入参考图的不受影响）`)) return
+  try { await $fetch(`/api/refs/${encodeURIComponent(name)}`, { method: 'DELETE' }); await loadRefs() }
+  catch (err: any) { showToast(err?.data?.message || '删除失败') }
 }
 const batchIndex = computed(()=>images.value.map((_,i)=>i)) // 简单标记全部参与
 /** 多槽位工作流角标：显示组内槽位（P1/P2/P3），悬浮提示第几组 */
@@ -1290,6 +1364,7 @@ function loadGenSettings() {
 onMounted(async () => {
   loadGenSettings()
   loadWorkflows()
+  loadRefs()          // 常用参考图库缩略图
   sweepQueue()        // 队列/历史统一来自 ComfyUI 原生 API，首次即拉
   ensureQueueSweep()
   refreshHistory()

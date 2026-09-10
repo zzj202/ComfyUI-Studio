@@ -882,6 +882,52 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   transition: background 0.15s, transform 0.15s;
 }
 .img-x:hover { background: var(--red); transform: scale(1.1); }
+/* 参考图上的 ⭐ 收藏进常用图库 */
+.img-star {
+  position:absolute; top:5px; left:30px; width:21px; height:21px;
+  border:none; border-radius:50%; cursor:pointer; font-size:11px; line-height:1;
+  background: rgba(12, 15, 26, .55); backdrop-filter: blur(3px);
+  transition: background 0.15s, transform 0.15s;
+}
+.img-star:hover { transform: scale(1.2); background: rgba(12, 15, 26, .8); }
+
+/* ===== 常用参考图库条 ===== */
+.ref-strip {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  padding: 10px 12px; margin-bottom: 12px;
+}
+.ref-strip-title {
+  display:flex; align-items:center; gap:8px; margin-bottom:8px;
+  font-size:13px; font-weight:650; color:var(--muted);
+}
+.ref-empty { font-size:12.5px; color:var(--muted); opacity:.85; }
+.ref-list {
+  display:flex; gap:9px; overflow-x:auto; padding-bottom:4px;
+  scrollbar-width: thin;
+}
+.ref-thumb {
+  position:relative; flex:0 0 auto; width:86px; height:66px; border-radius:8px; overflow:hidden;
+  border:1px solid var(--border); background:#10131c; cursor:grab;
+  box-shadow: var(--shadow-sm); transition: transform .15s, box-shadow .15s, border-color .15s;
+}
+.ref-thumb:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: var(--shadow-md); }
+.ref-thumb:active { cursor: grabbing; }
+.ref-thumb img { width:100%; height:100%; object-fit: cover; display:block; }
+.ref-name {
+  position:absolute; left:0; right:0; bottom:0; padding:2px 5px;
+  font-size:10px; color:#fff; background: linear-gradient(transparent, rgba(10,12,20,.78));
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  pointer-events:none;
+}
+.ref-x {
+  position:absolute; top:4px; right:4px; width:18px; height:18px;
+  border:none; border-radius:50%; cursor:pointer; color:#fff; font-size:10px; line-height:1;
+  background: rgba(12, 15, 26, .55); backdrop-filter: blur(3px);
+  transition: background 0.15s, transform 0.15s;
+}
+.ref-x:hover { background: var(--red); transform: scale(1.12); }
+
 .img-idx {
   position:absolute; left:5px; top:5px; min-width:19px; height:19px; padding:0 4px;
   background: var(--grad); color:#fff; border-radius:999px; font-size:11px; font-weight: 650;

@@ -1,0 +1,17 @@
+{
+  "workflows": [
+    {
+      "file": "7秒视频-提示词分开-lora.json",
+      "name": "7秒视频-提示词分开-lora",
+      "nodeCount": 29,
+      "hasMeta": true
+    },
+    {
+      "file": "klein-编辑-多图参考.json",
+      "name": "klein-编辑-多图参考",
+      "nodeCount": 20,
+      "hasMeta": true
+    }
+  ],
+  "dir": "server/workflows"
+}

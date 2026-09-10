@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "base": "http://106.75.68.116:8188",
+  "nodeCount": 0,
+  "models": {
+    "folders": [],
+    "files": {}
+  },
+  "embeddings": [],
+  "extensions": []
+}
