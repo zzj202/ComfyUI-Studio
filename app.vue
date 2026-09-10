@@ -394,6 +394,7 @@ function ensureAudio() {
 }
 // 后备提示音：WebAudio 不可用/被暂停时，直接播 public/beep.wav（不依赖 AudioContext）
 function fallbackBeep(loud: boolean) {
+  // loud（全部任务完成）→ 3 遍、间隔 3.5s，总时长约 10 秒
   const rounds = loud ? 3 : 1
   for (let i = 0; i < rounds; i++) {
     setTimeout(() => {
@@ -402,28 +403,31 @@ function fallbackBeep(loud: boolean) {
         a.volume = 1
         a.play().catch(() => console.warn('[chime] 后备提示音播放失败（可能被浏览器拦截）'))
       } catch { console.warn('[chime] 后备提示音异常') }
-    }, i * 1500)
+    }, i * 3500)
   }
 }
 function chime(loud: boolean) {
   if (!audioCtx || audioCtx.state !== 'running') { fallbackBeep(loud); return }
   const t0 = audioCtx.currentTime
-  const rounds = loud ? 3 : 1 // 全部批次完成 → 重复 3 遍，人在别处也能听见
+  const rounds = loud ? 3 : 1 // 全部任务完成 → 重复 3 遍，人在别处也能听见
+  const roundGap = loud ? 3.5 : 1.5 // loud：轮间隔 3.5s + 尾音 2.3s → 总时长约 10 秒
+  const noteGap = loud ? 0.35 : 0.18
+  const tail = loud ? 2.2 : 1.1
   for (let r = 0; r < rounds; r++) {
-    const t = t0 + r * 1.5
+    const t = t0 + r * roundGap
     // A5 → C#6 → E6 上行三连音「叮-叮-咚」（音量大、尾音长）
     ;[880, 1108.7, 1318.5].forEach((f, i) => {
       const o = audioCtx!.createOscillator()
       const g = audioCtx!.createGain()
       o.type = 'sine'
       o.frequency.value = f
-      const st = t + i * 0.18
+      const st = t + i * noteGap
       g.gain.setValueAtTime(0.0001, st)
       g.gain.linearRampToValueAtTime(0.45, st + 0.02)
-      g.gain.exponentialRampToValueAtTime(0.0001, st + 1.1)
+      g.gain.exponentialRampToValueAtTime(0.0001, st + tail)
       o.connect(g).connect(audioCtx!.destination)
       o.start(st)
-      o.stop(st + 1.2)
+      o.stop(st + tail + 0.1)
     })
   }
 }
